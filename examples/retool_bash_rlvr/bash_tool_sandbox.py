@@ -1,6 +1,7 @@
 """Bash tool sandbox for multi-turn RLVR environments."""
 
 import asyncio
+import hashlib
 import os
 from pathlib import Path
 from typing import Any
@@ -41,6 +42,37 @@ class BashSandbox:
         self.blocked_patterns = blocked_patterns
         Path(self.workdir).mkdir(parents=True, exist_ok=True)
 
+    def _directory_fingerprint(self) -> str:
+        """Return an md5 fingerprint representing files under the workdir."""
+
+        root = Path(self.workdir)
+        if not root.exists():
+            return ""
+
+        digest = hashlib.md5(usedforsecurity=False)
+        for path in sorted(root.rglob("*")):
+            if not path.is_file():
+                continue
+            try:
+                stat = path.stat()
+            except OSError:
+                continue
+
+            rel_path = str(path.relative_to(root))
+            digest.update(rel_path.encode("utf-8", errors="replace"))
+            digest.update(b"\0")
+            digest.update(str(stat.st_mtime_ns).encode("ascii"))
+            digest.update(b":")
+            digest.update(str(stat.st_size).encode("ascii"))
+            digest.update(b"\n")
+
+        return digest.hexdigest()
+
+    def _has_file_changes(self, before_fingerprint: str, after_fingerprint: str) -> bool:
+        """Return True if any file was created, modified, or deleted."""
+
+        return before_fingerprint != after_fingerprint
+
     async def execute_command(self, command: str) -> str:
         if not isinstance(command, str) or not command.strip():
             return "Error: 'command' must be a non-empty string."
@@ -49,6 +81,8 @@ class BashSandbox:
         for pattern in self.blocked_patterns:
             if pattern in command:
                 return "Error: command blocked by safety policy."
+
+        before_fingerprint = self._directory_fingerprint()
 
         try:
             proc = await asyncio.create_subprocess_shell(
@@ -74,6 +108,9 @@ class BashSandbox:
             parts.append(f"STDERR:\n{stderr}")
         if proc.returncode != 0:
             parts.append(f"Exit code: {proc.returncode}")
+
+        if self._has_file_changes(before_fingerprint, self._directory_fingerprint()):
+            parts.append("Files changed: yes")
 
         result = "\n".join(parts) if parts else "(no output)"
         return _truncate(result, self.max_output_chars)
