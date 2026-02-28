@@ -7,6 +7,7 @@ and then provide a final `Answer: \boxed{...}` response.
 ## Files
 
 - `generate_with_bash_retool.py`: Custom rollout + reward function for bash tool calls.
+- `custom_convert_samples_to_train_data.py`: Splits trajectories at context resets and expands train samples with divided rewards.
 - `bash_tool_sandbox.py`: Bash tool registry and command execution safeguards.
 - `retool_bash_qwen3_4b_rlvr.sh`: Launch script template for RLVR training.
 

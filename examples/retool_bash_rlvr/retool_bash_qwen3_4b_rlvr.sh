@@ -29,6 +29,7 @@ ROLLOUT_ARGS=(
 CUSTOM_ARGS=(
    --custom-generate-function-path generate_with_bash_retool.generate
    --custom-rm-path generate_with_bash_retool.reward_func
+   --custom-convert-samples-to-train-data-path custom_convert_samples_to_train_data.convert_samples_to_train_data
 )
 
 ray start --head --node-ip-address 127.0.0.1 --num-gpus 4 --disable-usage-stats --dashboard-host=0.0.0.0 --dashboard-port=8265
