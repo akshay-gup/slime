@@ -111,6 +111,18 @@ async def execute_predictions(prediction: str) -> tuple[str, bool]:
     )
 
 
+def _has_file_change(tool_response: str) -> bool:
+    return "Files changed: yes" in tool_response
+
+
+def _archive_and_reset_context_tokens(
+    context_response_token_ids: list[int], archived_context_response_token_ids: list[list[int]]
+) -> list[int]:
+    if context_response_token_ids:
+        archived_context_response_token_ids.append(context_response_token_ids.copy())
+    return []
+
+
 async def generate(args, sample: Sample, sampling_params) -> Sample:
     assert not args.partial_rollout, "Partial rollout is not supported for this function at the moment."
 
@@ -124,10 +136,13 @@ async def generate(args, sample: Sample, sampling_params) -> Sample:
     response = ""
     response_token_ids = []
     loss_masks = []
+    context_response_token_ids = []
+    archived_context_response_token_ids = []
     tool_call_count = 0
+    saw_length_stop = False
 
     for _ in range(TOOL_CONFIGS["max_turns"]):
-        current_token_ids = prompt_tokens_ids + response_token_ids
+        current_token_ids = prompt_tokens_ids + context_response_token_ids
         payload = {
             "input_ids": current_token_ids,
             "sampling_params": sampling_params,
@@ -149,9 +164,11 @@ async def generate(args, sample: Sample, sampling_params) -> Sample:
 
         response += cur_response
         response_token_ids += cur_response_token_ids
+        context_response_token_ids += cur_response_token_ids
         loss_masks += [1] * len(cur_response_token_ids)
 
         if output["meta_info"]["finish_reason"]["type"] == "length":
+            saw_length_stop = True
             break
 
         next_obs, done = await execute_predictions(cur_response)
@@ -164,8 +181,16 @@ async def generate(args, sample: Sample, sampling_params) -> Sample:
         obs_tokens_ids = state.tokenizer(next_obs, add_special_tokens=False)["input_ids"]
         response += next_obs
         response_token_ids += obs_tokens_ids
+        context_response_token_ids += obs_tokens_ids
         loss_masks += [0] * len(obs_tokens_ids)
         sample.rollout_log_probs += [0.0] * len(obs_tokens_ids)
+
+        if _has_file_change(next_obs):
+            # When files are modified, clear ongoing context for the next model step.
+            # Keep the dropped context for downstream data pairing.
+            context_response_token_ids = _archive_and_reset_context_tokens(
+                context_response_token_ids, archived_context_response_token_ids
+            )
 
         if tool_call_count >= TOOL_CONFIGS["max_tool_calls"]:
             break
@@ -175,8 +200,9 @@ async def generate(args, sample: Sample, sampling_params) -> Sample:
     sample.response = response
     sample.loss_mask = loss_masks
     sample.tool_call_count = tool_call_count
+    sample.context_reset_token_segments = archived_context_response_token_ids
 
-    if output["meta_info"]["finish_reason"]["type"] == "length":
+    if saw_length_stop:
         sample.status = Sample.Status.TRUNCATED
     elif output["meta_info"]["finish_reason"]["type"] == "stop":
         sample.status = Sample.Status.COMPLETED
