@@ -13,6 +13,7 @@ These examples provide concrete examples to leverage slime in your own RL workfl
 - **[on_policy_distillation](./on_policy_distillation)**: Example implementation for on-policy distillation, extending the reinforcement learning pipeline to support teacher–student distillation directly within on-policy training.
 - **[reproducibility](./reproducibility)**: Guides on achieving bitwise experiment reproduction using deterministic modes.
 - **[retool](./retool)**: Demonstrates the retool functionality for tool-enabled language model generation.
+- **[retool_bash_rlvr](./retool_bash_rlvr)**: Retool-style multi-turn RLVR example that exposes a bash tool to the model.
 - **[search-r1](./search-r1)**: A minimal reproduction of Search-R1, featuring multi-turn conversation and tool-calling.
 - **[strands_sglang](./strands_sglang)**: Integration example with the Strands-Agents scaffolding framework.
 - **[tau-bench](./tau-bench)**: Training in an agentic multi-turn tool use environment (Tau-bench).
