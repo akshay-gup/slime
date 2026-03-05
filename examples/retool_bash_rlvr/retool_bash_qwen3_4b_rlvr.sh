@@ -38,7 +38,6 @@ ROLLOUT_ARGS=(
    --prompt-data "${PROMPT_DATA}"
    --input-key prompt
    --label-key label
-   --apply-chat-template
    --reward-key score
    --num-rollout 3000
    --rollout-batch-size 32
