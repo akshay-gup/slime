@@ -142,83 +142,86 @@ async def generate(args, sample: Sample, sampling_params) -> Sample:
 
     tool_specs = tool_registry.get_tool_specs()
     rollout_key = _resolve_rollout_key(sample)
-    tool_registry.prepare_rollout(rollout_key)
-    prompt = format_conversation_with_tools(prompt=sample.prompt, tools=tool_specs)
+    rollout_lock = tool_registry.get_rollout_lock(rollout_key)
 
-    prompt_tokens_ids = state.tokenizer(prompt, add_special_tokens=False)["input_ids"]
-    response = ""
-    response_token_ids = []
-    loss_masks = []
-    context_response_token_ids = []
-    archived_context_response_token_ids = []
-    tool_call_count = 0
-    saw_length_stop = False
+    async with rollout_lock:
+        tool_registry.prepare_rollout(rollout_key)
+        prompt = format_conversation_with_tools(prompt=sample.prompt, tools=tool_specs)
 
-    for _ in range(TOOL_CONFIGS["max_turns"]):
-        current_token_ids = prompt_tokens_ids + context_response_token_ids
-        payload = {
-            "input_ids": current_token_ids,
-            "sampling_params": sampling_params,
-            "return_logprob": True,
-        }
+        prompt_tokens_ids = state.tokenizer(prompt, add_special_tokens=False)["input_ids"]
+        response = ""
+        response_token_ids = []
+        loss_masks = []
+        context_response_token_ids = []
+        archived_context_response_token_ids = []
+        tool_call_count = 0
+        saw_length_stop = False
 
-        output = await post(url, payload)
-        if output["meta_info"]["finish_reason"]["type"] == "abort":
-            sample.status = Sample.Status.ABORTED
-            return sample
+        for _ in range(TOOL_CONFIGS["max_turns"]):
+            current_token_ids = prompt_tokens_ids + context_response_token_ids
+            payload = {
+                "input_ids": current_token_ids,
+                "sampling_params": sampling_params,
+                "return_logprob": True,
+            }
 
-        cur_response_token_ids = [item[1] for item in output["meta_info"]["output_token_logprobs"]]
-        cur_response = state.tokenizer.decode(cur_response_token_ids)
-        cur_log_probs = [item[0] for item in output["meta_info"]["output_token_logprobs"]]
+            output = await post(url, payload)
+            if output["meta_info"]["finish_reason"]["type"] == "abort":
+                sample.status = Sample.Status.ABORTED
+                return sample
 
-        if sample.rollout_log_probs is None:
-            sample.rollout_log_probs = []
-        sample.rollout_log_probs += cur_log_probs
+            cur_response_token_ids = [item[1] for item in output["meta_info"]["output_token_logprobs"]]
+            cur_response = state.tokenizer.decode(cur_response_token_ids)
+            cur_log_probs = [item[0] for item in output["meta_info"]["output_token_logprobs"]]
 
-        response += cur_response
-        response_token_ids += cur_response_token_ids
-        context_response_token_ids += cur_response_token_ids
-        loss_masks += [1] * len(cur_response_token_ids)
+            if sample.rollout_log_probs is None:
+                sample.rollout_log_probs = []
+            sample.rollout_log_probs += cur_log_probs
 
-        if output["meta_info"]["finish_reason"]["type"] == "length":
-            saw_length_stop = True
-            break
+            response += cur_response
+            response_token_ids += cur_response_token_ids
+            context_response_token_ids += cur_response_token_ids
+            loss_masks += [1] * len(cur_response_token_ids)
 
-        next_obs, done = await execute_predictions(cur_response, rollout_key=rollout_key)
-        if done:
-            break
+            if output["meta_info"]["finish_reason"]["type"] == "length":
+                saw_length_stop = True
+                break
 
-        if "<tool_response>" in next_obs:
-            tool_call_count += 1
+            next_obs, done = await execute_predictions(cur_response, rollout_key=rollout_key)
+            if done:
+                break
 
-        obs_tokens_ids = state.tokenizer(next_obs, add_special_tokens=False)["input_ids"]
-        response += next_obs
-        response_token_ids += obs_tokens_ids
-        context_response_token_ids += obs_tokens_ids
-        loss_masks += [0] * len(obs_tokens_ids)
-        sample.rollout_log_probs += [0.0] * len(obs_tokens_ids)
+            if "<tool_response>" in next_obs:
+                tool_call_count += 1
 
-        if _has_file_change(next_obs):
-            # When files are modified, clear ongoing context for the next model step.
-            # Keep the dropped context for downstream data pairing.
-            context_response_token_ids = _archive_and_reset_context_tokens(
-                context_response_token_ids, archived_context_response_token_ids
-            )
+            obs_tokens_ids = state.tokenizer(next_obs, add_special_tokens=False)["input_ids"]
+            response += next_obs
+            response_token_ids += obs_tokens_ids
+            context_response_token_ids += obs_tokens_ids
+            loss_masks += [0] * len(obs_tokens_ids)
+            sample.rollout_log_probs += [0.0] * len(obs_tokens_ids)
 
-        if tool_call_count >= TOOL_CONFIGS["max_tool_calls"]:
-            break
+            if _has_file_change(next_obs):
+                # When files are modified, clear ongoing context for the next model step.
+                # Keep the dropped context for downstream data pairing.
+                context_response_token_ids = _archive_and_reset_context_tokens(
+                    context_response_token_ids, archived_context_response_token_ids
+                )
 
-    sample.tokens = prompt_tokens_ids + response_token_ids
-    sample.response_length = len(response_token_ids)
-    sample.response = response
-    sample.loss_mask = loss_masks
-    sample.tool_call_count = tool_call_count
-    sample.context_reset_token_segments = archived_context_response_token_ids
+            if tool_call_count >= TOOL_CONFIGS["max_tool_calls"]:
+                break
 
-    if saw_length_stop:
-        sample.status = Sample.Status.TRUNCATED
-    elif output["meta_info"]["finish_reason"]["type"] == "stop":
-        sample.status = Sample.Status.COMPLETED
+        sample.tokens = prompt_tokens_ids + response_token_ids
+        sample.response_length = len(response_token_ids)
+        sample.response = response
+        sample.loss_mask = loss_masks
+        sample.tool_call_count = tool_call_count
+        sample.context_reset_token_segments = archived_context_response_token_ids
+
+        if saw_length_stop:
+            sample.status = Sample.Status.TRUNCATED
+        elif output["meta_info"]["finish_reason"]["type"] == "stop":
+            sample.status = Sample.Status.COMPLETED
 
     return sample
 
@@ -228,24 +231,28 @@ async def reward_func(args, sample, **kwargs):
         raise TypeError("Sample must be an instance of Sample class.")
 
     rollout_key = _resolve_rollout_key(sample)
-    rollout_dir = tool_registry._resolve_rollout_workdir(rollout_key)
-    result_file = Path(rollout_dir) / REWARD_RESULT_FILE
-    file_answer = ""
-    if result_file.exists() and result_file.is_file():
-        file_answer = result_file.read_text(encoding="utf-8", errors="replace").strip()
+    rollout_lock = tool_registry.get_rollout_lock(rollout_key)
 
-    if file_answer:
-        solution_str = f"Answer: \\boxed{{{file_answer}}}"
-    else:
-        solution_str = ""
+    async with rollout_lock:
+        rollout_dir = tool_registry._resolve_rollout_workdir(rollout_key)
+        result_file = Path(rollout_dir) / REWARD_RESULT_FILE
+        file_answer = ""
+        if result_file.exists() and result_file.is_file():
+            file_answer = result_file.read_text(encoding="utf-8", errors="replace").strip()
 
-    ground_truth = sample.label if sample.label is not None else ""
-    result = math_dapo_compute_score(solution_str, ground_truth, strict_box_verify=True)
-    if result["pred"] is None:
-        result["pred"] = ""
+        if file_answer:
+            solution_str = f"Answer: \\boxed{{{file_answer}}}"
+        else:
+            solution_str = ""
 
-    result["reward_result_file"] = str(result_file)
-    result["reward_result_content"] = file_answer
-    merge_message = tool_registry.finalize_rollout(rollout_key=rollout_key, reward=result["score"])
-    result["merge_message"] = merge_message
+        ground_truth = sample.label if sample.label is not None else ""
+        result = math_dapo_compute_score(solution_str, ground_truth, strict_box_verify=True)
+        if result["pred"] is None:
+            result["pred"] = ""
+
+        result["reward_result_file"] = str(result_file)
+        result["reward_result_content"] = file_answer
+        merge_message = tool_registry.finalize_rollout(rollout_key=rollout_key, reward=result["score"])
+        result["merge_message"] = merge_message
+
     return result
