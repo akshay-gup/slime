@@ -9,13 +9,15 @@ import shutil
 from pathlib import Path
 from typing import Any
 
+DEFAULT_WORKDIR = str((Path(__file__).resolve().parent / ".bash_tool_workspace").resolve())
+
 TOOL_CONFIGS = {
     "max_turns": 16,
     "max_tool_calls": 16,
     "tool_concurrency": 16,
     "bash_timeout": 30,
     "max_output_chars": 8192,
-    "workdir": "/tmp/slime_bash_tool",
+    "workdir": os.environ.get("SLIME_BASH_TOOL_WORKDIR", DEFAULT_WORKDIR),
     "num_rollout_envs": 8,
     "shared_workspace_across_prompts": True,
     "blocked_patterns": [
