@@ -4,12 +4,11 @@ import asyncio
 import hashlib
 import os
 import subprocess
-import tempfile
 import shutil
 from pathlib import Path
 from typing import Any
 
-DEFAULT_WORKDIR = str((Path(__file__).resolve().parent / ".bash_tool_workspace").resolve())
+DEFAULT_WORKDIR = "/opt/NeMo/slime_bash_tool_workspace"
 
 TOOL_CONFIGS = {
     "max_turns": 16,

@@ -24,6 +24,7 @@ HF_CHECKPOINT="${HF_CHECKPOINT:-${REPO_ROOT}/checkpoints/qwen3-4b-sft}"
 REF_LOAD="${REF_LOAD:-${REPO_ROOT}/checkpoints/qwen3-4b-sft_torch_dist}"
 SAVE_DIR="${SAVE_DIR:-${REPO_ROOT}/outputs/qwen3-4b-bash-rlvr}"
 PROMPT_DATA="${PROMPT_DATA:-${REPO_ROOT}/data/dapo-math-17k/dapo-math-17k.jsonl}"
+SLIME_BASH_TOOL_WORKDIR="${SLIME_BASH_TOOL_WORKDIR:-/opt/NeMo/slime_bash_tool_workspace}"
 
 CKPT_ARGS=(
    --hf-checkpoint "${HF_CHECKPOINT}"
@@ -62,7 +63,8 @@ ray start --head --node-ip-address 127.0.0.1 --num-gpus "${NUM_GPUS}" --disable-
 
 RUNTIME_ENV_JSON="{
   \"env_vars\": {
-    \"PYTHONPATH\": \"${MEGATRON_LM_PATH}:${SCRIPT_DIR}:${REPO_ROOT}\"
+    \"PYTHONPATH\": \"${MEGATRON_LM_PATH}:${SCRIPT_DIR}:${REPO_ROOT}\",
+    \"SLIME_BASH_TOOL_WORKDIR\": \"${SLIME_BASH_TOOL_WORKDIR}\"
   }
 }"
 
