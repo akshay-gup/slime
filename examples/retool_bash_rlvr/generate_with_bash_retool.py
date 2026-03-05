@@ -225,4 +225,8 @@ async def reward_func(args, sample, **kwargs):
         result["score"] = min(-0.6, result["score"] + tool_call_reward)
     if result["pred"] is None:
         result["pred"] = ""
+
+    rollout_key = sample.index if sample.index is not None else sample.group_index
+    merge_message = tool_registry.finalize_rollout(rollout_key=rollout_key, reward=result["score"])
+    result["merge_message"] = merge_message
     return result

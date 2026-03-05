@@ -36,3 +36,13 @@ Tool outputs are appended as:
 - timeout (`bash_timeout`)
 - output cap (`max_output_chars`)
 - blocked substrings (e.g. `rm -rf /`, `mkfs`)
+
+## Rollout workspace merge policy
+
+Each rollout runs in an isolated copy of `workdir/main`. After reward is computed:
+
+- reward `> 0`: changes are merged back into `workdir/main`, auto-merged with `git merge-file` when possible, then committed.
+- reward `<= 0`: all rollout workspace changes are discarded.
+- merge conflicts: both sides are kept as `*.main` and `*.rollout` companion files.
+
+This behavior is implemented in `bash_tool_sandbox.py` via `ToolRegistry.finalize_rollout()`, called from `reward_func()`.

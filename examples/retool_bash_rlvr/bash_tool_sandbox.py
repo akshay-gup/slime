@@ -3,6 +3,8 @@
 import asyncio
 import hashlib
 import os
+import subprocess
+import tempfile
 import shutil
 from pathlib import Path
 from typing import Any
@@ -135,7 +137,9 @@ class ToolRegistry:
     def _prepare_rollout_workdirs(self) -> list[Path]:
         main_dir = self.base_workdir / "main"
         rollout_root = self.base_workdir / "rollout_envs"
+        rollout_base_root = self.base_workdir / "rollout_bases"
         rollout_root.mkdir(parents=True, exist_ok=True)
+        rollout_base_root.mkdir(parents=True, exist_ok=True)
 
         if not main_dir.exists():
             main_dir.mkdir(parents=True, exist_ok=True)
@@ -143,10 +147,13 @@ class ToolRegistry:
         rollout_workdirs: list[Path] = []
         for idx in range(self.num_rollout_envs):
             target_dir = rollout_root / f"main_{idx}"
-            if target_dir.exists():
-                shutil.rmtree(target_dir)
-            shutil.copytree(main_dir, target_dir)
+            self._reset_rollout_dir(target_dir)
             rollout_workdirs.append(target_dir)
+
+            base_dir = rollout_base_root / f"main_{idx}"
+            self._copy_directory(main_dir, base_dir)
+
+        self._ensure_main_git_repo()
 
         return rollout_workdirs
 
@@ -154,6 +161,152 @@ class ToolRegistry:
         if rollout_key is None:
             return self.rollout_workdirs[0]
         return self.rollout_workdirs[hash(str(rollout_key)) % len(self.rollout_workdirs)]
+
+    def _resolve_rollout_base_dir(self, rollout_key: str | int | None) -> Path:
+        idx = 0 if rollout_key is None else hash(str(rollout_key)) % len(self.rollout_workdirs)
+        return self.base_workdir / "rollout_bases" / f"main_{idx}"
+
+    def _copy_directory(self, source: Path, target: Path):
+        if target.exists():
+            shutil.rmtree(target)
+        shutil.copytree(source, target, ignore=shutil.ignore_patterns(".git"), dirs_exist_ok=True)
+
+    def _reset_rollout_dir(self, target_dir: Path):
+        self._copy_directory(self.base_workdir / "main", target_dir)
+
+    def _iter_files(self, root: Path) -> set[Path]:
+        files: set[Path] = set()
+        if not root.exists():
+            return files
+        for path in root.rglob("*"):
+            if path.is_file() and ".git" not in path.parts:
+                files.add(path.relative_to(root))
+        return files
+
+    def _read_bytes(self, root: Path, relative_path: Path) -> bytes | None:
+        path = root / relative_path
+        if not path.exists() or not path.is_file():
+            return None
+        return path.read_bytes()
+
+    def _write_bytes(self, root: Path, relative_path: Path, content: bytes | None):
+        path = root / relative_path
+        if content is None:
+            if path.exists():
+                path.unlink()
+            return
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(content)
+
+    def _merge_text_with_git(self, base: bytes, current: bytes, incoming: bytes) -> tuple[bytes, bool]:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp = Path(tmpdir)
+            current_file = tmp / "current.txt"
+            base_file = tmp / "base.txt"
+            incoming_file = tmp / "incoming.txt"
+            current_file.write_bytes(current)
+            base_file.write_bytes(base)
+            incoming_file.write_bytes(incoming)
+
+            proc = subprocess.run(
+                [
+                    "git",
+                    "merge-file",
+                    "-p",
+                    "--diff3",
+                    "-L",
+                    "main",
+                    "-L",
+                    "base",
+                    "-L",
+                    "rollout",
+                    str(current_file),
+                    str(base_file),
+                    str(incoming_file),
+                ],
+                capture_output=True,
+                check=False,
+            )
+        if proc.returncode in (0, 1) and proc.stdout:
+            return proc.stdout, proc.returncode == 1
+        return incoming, True
+
+    def _build_conflict_copy(self, source_name: str, content: bytes | None) -> bytes:
+        if content is None:
+            return f"<{source_name} deleted this file>\n".encode("utf-8")
+        return content
+
+    def _ensure_main_git_repo(self):
+        main_dir = self.base_workdir / "main"
+        if not (main_dir / ".git").exists():
+            subprocess.run(["git", "init"], cwd=main_dir, check=True)
+            subprocess.run(["git", "config", "user.email", "slime-bash@example.com"], cwd=main_dir, check=True)
+            subprocess.run(["git", "config", "user.name", "slime-bash-tool"], cwd=main_dir, check=True)
+            subprocess.run(["git", "add", "-A"], cwd=main_dir, check=True)
+            subprocess.run(["git", "commit", "--allow-empty", "-m", "Initialize main workspace"], cwd=main_dir, check=True)
+
+    def finalize_rollout(self, rollout_key: str | int | None, reward: float | int) -> str:
+        rollout_dir = self._resolve_rollout_workdir(rollout_key)
+        rollout_base_dir = self._resolve_rollout_base_dir(rollout_key)
+        main_dir = self.base_workdir / "main"
+
+        reward_value = float(reward)
+        if reward_value <= 0:
+            self._reset_rollout_dir(rollout_dir)
+            self._copy_directory(main_dir, rollout_base_dir)
+            return f"Discarded rollout changes for reward={reward_value:.4f}."
+
+        all_files = self._iter_files(main_dir) | self._iter_files(rollout_dir) | self._iter_files(rollout_base_dir)
+        conflict_count = 0
+        for rel in sorted(all_files):
+            base_content = self._read_bytes(rollout_base_dir, rel)
+            main_content = self._read_bytes(main_dir, rel)
+            rollout_content = self._read_bytes(rollout_dir, rel)
+
+            if rollout_content == base_content:
+                continue
+
+            if main_content == base_content:
+                self._write_bytes(main_dir, rel, rollout_content)
+                continue
+
+            if main_content == rollout_content:
+                continue
+
+            if base_content is not None and main_content is not None and rollout_content is not None:
+                try:
+                    merged, has_conflict = self._merge_text_with_git(base_content, main_content, rollout_content)
+                    self._write_bytes(main_dir, rel, merged)
+                    if has_conflict:
+                        conflict_count += 1
+                        self._write_bytes(
+                            main_dir,
+                            rel.with_suffix(rel.suffix + ".main"),
+                            self._build_conflict_copy("main", main_content),
+                        )
+                        self._write_bytes(
+                            main_dir,
+                            rel.with_suffix(rel.suffix + ".rollout"),
+                            self._build_conflict_copy("rollout", rollout_content),
+                        )
+                    continue
+                except UnicodeDecodeError:
+                    pass
+
+            conflict_count += 1
+            self._write_bytes(main_dir, rel.with_suffix(rel.suffix + ".main"), self._build_conflict_copy("main", main_content))
+            self._write_bytes(main_dir, rel.with_suffix(rel.suffix + ".rollout"), self._build_conflict_copy("rollout", rollout_content))
+
+        subprocess.run(["git", "add", "-A"], cwd=main_dir, check=True)
+        commit_msg = f"Merge rollout {rollout_key} (reward={reward_value:.4f}, conflicts={conflict_count})"
+        commit = subprocess.run(["git", "commit", "-m", commit_msg], cwd=main_dir, capture_output=True, text=True, check=False)
+        self._reset_rollout_dir(rollout_dir)
+        self._copy_directory(main_dir, rollout_base_dir)
+        if commit.returncode != 0 and "nothing to commit" in commit.stdout + commit.stderr:
+            return f"No merge changes from rollout reward={reward_value:.4f}."
+        if commit.returncode != 0:
+            return f"Merge failed to commit: {commit.stderr.strip()}"
+        return f"Merged rollout with reward={reward_value:.4f}; conflicts={conflict_count}."
 
     def _register_default_tools(self):
         self.register_tool(
