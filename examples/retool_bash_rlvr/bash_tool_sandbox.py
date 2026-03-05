@@ -3,6 +3,7 @@
 import asyncio
 import hashlib
 import os
+import shutil
 from pathlib import Path
 from typing import Any
 
@@ -13,6 +14,7 @@ TOOL_CONFIGS = {
     "bash_timeout": 30,
     "max_output_chars": 8192,
     "workdir": "/tmp/slime_bash_tool",
+    "num_rollout_envs": 8,
     "blocked_patterns": [
         "rm -rf /",
         ":(){ :|:&};:",
@@ -35,17 +37,15 @@ def _truncate(output: str, max_chars: int) -> str:
 class BashSandbox:
     """Execute bash commands with basic safety checks."""
 
-    def __init__(self, timeout: int, max_output_chars: int, workdir: str, blocked_patterns: list[str]):
+    def __init__(self, timeout: int, max_output_chars: int, blocked_patterns: list[str]):
         self.timeout = timeout
         self.max_output_chars = max_output_chars
-        self.workdir = workdir
         self.blocked_patterns = blocked_patterns
-        Path(self.workdir).mkdir(parents=True, exist_ok=True)
 
-    def _directory_fingerprint(self) -> str:
+    def _directory_fingerprint(self, workdir: str) -> str:
         """Return an md5 fingerprint representing files under the workdir."""
 
-        root = Path(self.workdir)
+        root = Path(workdir)
         if not root.exists():
             return ""
 
@@ -73,7 +73,7 @@ class BashSandbox:
 
         return before_fingerprint != after_fingerprint
 
-    async def execute_command(self, command: str) -> str:
+    async def execute_command(self, command: str, workdir: str, extra_env: dict[str, str] | None = None) -> str:
         if not isinstance(command, str) or not command.strip():
             return "Error: 'command' must be a non-empty string."
 
@@ -82,15 +82,16 @@ class BashSandbox:
             if pattern in command:
                 return "Error: command blocked by safety policy."
 
-        before_fingerprint = self._directory_fingerprint()
+        Path(workdir).mkdir(parents=True, exist_ok=True)
+        before_fingerprint = self._directory_fingerprint(workdir)
 
         try:
             proc = await asyncio.create_subprocess_shell(
                 command,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
-                cwd=self.workdir,
-                env={**os.environ, "GIT_TERMINAL_PROMPT": "0"},
+                cwd=workdir,
+                env={**os.environ, "GIT_TERMINAL_PROMPT": "0", **(extra_env or {})},
             )
             stdout_bytes, stderr_bytes = await asyncio.wait_for(proc.communicate(), timeout=self.timeout)
         except asyncio.TimeoutError:
@@ -109,7 +110,7 @@ class BashSandbox:
         if proc.returncode != 0:
             parts.append(f"Exit code: {proc.returncode}")
 
-        if self._has_file_changes(before_fingerprint, self._directory_fingerprint()):
+        if self._has_file_changes(before_fingerprint, self._directory_fingerprint(workdir)):
             parts.append("Files changed: yes")
 
         result = "\n".join(parts) if parts else "(no output)"
@@ -121,13 +122,38 @@ class ToolRegistry:
 
     def __init__(self):
         self.tools: dict[str, dict[str, Any]] = {}
+        self.base_workdir = Path(TOOL_CONFIGS["workdir"])
+        self.num_rollout_envs = int(TOOL_CONFIGS["num_rollout_envs"])
+        self.rollout_workdirs = self._prepare_rollout_workdirs()
         self.bash_sandbox = BashSandbox(
             timeout=TOOL_CONFIGS["bash_timeout"],
             max_output_chars=TOOL_CONFIGS["max_output_chars"],
-            workdir=TOOL_CONFIGS["workdir"],
             blocked_patterns=TOOL_CONFIGS["blocked_patterns"],
         )
         self._register_default_tools()
+
+    def _prepare_rollout_workdirs(self) -> list[Path]:
+        main_dir = self.base_workdir / "main"
+        rollout_root = self.base_workdir / "rollout_envs"
+        rollout_root.mkdir(parents=True, exist_ok=True)
+
+        if not main_dir.exists():
+            main_dir.mkdir(parents=True, exist_ok=True)
+
+        rollout_workdirs: list[Path] = []
+        for idx in range(self.num_rollout_envs):
+            target_dir = rollout_root / f"main_{idx}"
+            if target_dir.exists():
+                shutil.rmtree(target_dir)
+            shutil.copytree(main_dir, target_dir)
+            rollout_workdirs.append(target_dir)
+
+        return rollout_workdirs
+
+    def _resolve_rollout_workdir(self, rollout_key: str | int | None) -> Path:
+        if rollout_key is None:
+            return self.rollout_workdirs[0]
+        return self.rollout_workdirs[hash(str(rollout_key)) % len(self.rollout_workdirs)]
 
     def _register_default_tools(self):
         self.register_tool(
@@ -160,11 +186,17 @@ class ToolRegistry:
     def get_tool_specs(self) -> list[dict[str, Any]]:
         return list(self.tools.values())
 
-    async def execute_tool(self, tool_name: str, arguments: dict[str, Any]) -> str:
+    async def execute_tool(self, tool_name: str, arguments: dict[str, Any], rollout_key: str | int | None = None) -> str:
         if tool_name != "bash":
             return f"Error: Tool '{tool_name}' not found"
+
         command = arguments.get("command", "")
-        return await self.bash_sandbox.execute_command(command)
+        workdir = self._resolve_rollout_workdir(rollout_key)
+        extra_env = {
+            "SLIME_BASH_MAIN_DIR": str(workdir),
+            "SLIME_BASH_ROLLOUT_KEY": "" if rollout_key is None else str(rollout_key),
+        }
+        return await self.bash_sandbox.execute_command(command, workdir=str(workdir), extra_env=extra_env)
 
 
 tool_registry = ToolRegistry()

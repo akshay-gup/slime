@@ -94,11 +94,11 @@ def postprocess_predictions(prediction: str):
     return None, ""
 
 
-async def execute_predictions(prediction: str) -> tuple[str, bool]:
+async def execute_predictions(prediction: str, rollout_key: str | int | None) -> tuple[str, bool]:
     action, content = postprocess_predictions(prediction)
 
     if action == "bash":
-        result = await tool_registry.execute_tool("bash", {"command": content})
+        result = await tool_registry.execute_tool("bash", {"command": content}, rollout_key=rollout_key)
         return f"\n\n<tool_response>\n{result}\n</tool_response>\n\n", False
     if action == "answer":
         return "", True
@@ -130,6 +130,7 @@ async def generate(args, sample: Sample, sampling_params) -> Sample:
     url = f"http://{args.sglang_router_ip}:{args.sglang_router_port}/generate"
 
     tool_specs = tool_registry.get_tool_specs()
+    rollout_key = sample.index if sample.index is not None else sample.group_index
     prompt = format_conversation_with_tools(prompt=sample.prompt, tools=tool_specs)
 
     prompt_tokens_ids = state.tokenizer(prompt, add_special_tokens=False)["input_ids"]
@@ -171,7 +172,7 @@ async def generate(args, sample: Sample, sampling_params) -> Sample:
             saw_length_stop = True
             break
 
-        next_obs, done = await execute_predictions(cur_response)
+        next_obs, done = await execute_predictions(cur_response, rollout_key=rollout_key)
         if done:
             break
 
