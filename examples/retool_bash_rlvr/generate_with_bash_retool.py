@@ -1,4 +1,5 @@
 import re
+from pathlib import Path
 from typing import Any
 
 try:
@@ -16,6 +17,8 @@ except ImportError as e:
     raise ImportError("MathDapo is not installed") from e
 
 from bash_tool_sandbox import TOOL_CONFIGS, tool_registry
+
+REWARD_RESULT_FILE = "reward_result.txt"
 
 TOOL_TEMPLATE = """<|im_start|>system
 {%- if messages[0]['role'] == 'system' %}
@@ -61,7 +64,9 @@ def format_conversation_with_tools(prompt: str, tools: list[dict[str, Any]] = No
             "role": "system",
             "content": (
                 "You are a helpful assistant. Use the bash tool for computations, file inspection, "
-                "and shell-based reasoning when useful. Return final answers using Answer: \\boxed{...}."
+                "and shell-based reasoning when useful. Write your final computed answer to "
+                f"`{REWARD_RESULT_FILE}` in the working directory before finishing. "
+                "Return final answers using Answer: \\boxed{...}."
             ),
         },
         {"role": "user", "content": prompt},
@@ -215,13 +220,25 @@ async def reward_func(args, sample, **kwargs):
     if not isinstance(sample, Sample):
         raise TypeError("Sample must be an instance of Sample class.")
 
-    solution_str = sample.prompt + sample.response
+    rollout_key = sample.index if sample.index is not None else sample.group_index
+    rollout_dir = tool_registry._resolve_rollout_workdir(rollout_key)
+    result_file = Path(rollout_dir) / REWARD_RESULT_FILE
+    file_answer = ""
+    if result_file.exists() and result_file.is_file():
+        file_answer = result_file.read_text(encoding="utf-8", errors="replace").strip()
+
+    if file_answer:
+        solution_str = f"Answer: \\boxed{{{file_answer}}}"
+    else:
+        solution_str = ""
+
     ground_truth = sample.label if sample.label is not None else ""
     result = math_dapo_compute_score(solution_str, ground_truth, strict_box_verify=True)
     if result["pred"] is None:
         result["pred"] = ""
 
-    rollout_key = sample.index if sample.index is not None else sample.group_index
+    result["reward_result_file"] = str(result_file)
+    result["reward_result_content"] = file_answer
     merge_message = tool_registry.finalize_rollout(rollout_key=rollout_key, reward=result["score"])
     result["merge_message"] = merge_message
     return result
