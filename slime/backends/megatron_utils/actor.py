@@ -126,7 +126,10 @@ class MegatronTrainRayActor(TrainRayActor):
                 self.weights_backuper.backup("rollout_actor")
 
         if self.args.vocab_size is None:
-            self.args.vocab_size = self.tokenizer.vocab_size
+            # Prefer HF config vocab_size (which may include model-native padding)
+            # over tokenizer vocab_size (which may be smaller, e.g. GPT-OSS).
+            hf_vocab = getattr(self.hf_config, "vocab_size", None)
+            self.args.vocab_size = hf_vocab if hf_vocab is not None else self.tokenizer.vocab_size
 
         update_weight_cls = UpdateWeightFromTensor if self.args.colocate else UpdateWeightFromDistributed
         self.weight_updater = update_weight_cls(
@@ -535,11 +538,11 @@ class MegatronTrainRayActor(TrainRayActor):
 
         if self.args.use_fault_tolerance:
             if dist.get_rank() == 0:
-                ray.get(self.rollout_manager.recover_rollout_engines.remote())
+                ray.get(self.rollout_manager.recover_updatable_engines.remote())
             dist.barrier(group=get_gloo_group())
 
         rollout_engines, rollout_engine_lock, num_new_engines, engine_gpu_counts, engine_gpu_offsets = ray.get(
-            self.rollout_manager.get_rollout_engines_and_lock.remote()
+            self.rollout_manager.get_updatable_engines_and_lock.remote()
         )
 
         if self.args.offload_train:
@@ -554,7 +557,7 @@ class MegatronTrainRayActor(TrainRayActor):
             )
             dist.barrier(group=get_gloo_group())
             if dist.get_rank() == 0:
-                ray.get(self.rollout_manager.clear_num_new_engines.remote())
+                ray.get(self.rollout_manager.clear_updatable_num_new_engines.remote())
 
         with torch_memory_saver.disable() if self.args.offload_train else nullcontext():
             print_memory("before update_weights")
