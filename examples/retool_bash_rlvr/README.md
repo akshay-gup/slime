@@ -45,4 +45,12 @@ Each rollout runs in an isolated copy of `workdir/main`. After reward is compute
 - reward `<= 0`: all rollout workspace changes are discarded.
 - merge conflicts: both sides are kept as `*.main` and `*.rollout` companion files.
 
-This behavior is implemented in `bash_tool_sandbox.py` via `ToolRegistry.finalize_rollout()`, called from `reward_func()`.
+By default (`shared_workspace_across_prompts=True`), all prompts share one bash workspace lineage:
+
+- every sample starts by refreshing its rollout copy from the latest `workdir/main`
+- one shared rollout slot is used for all prompts
+- split/merge logic still happens per sample (branch, score, merge-or-discard)
+
+Set `shared_workspace_across_prompts=False` to hash prompts into multiple rollout slots using the rollout key.
+
+This behavior is implemented in `bash_tool_sandbox.py` via `ToolRegistry.prepare_rollout()` and `ToolRegistry.finalize_rollout()`, called from `generate()` and `reward_func()`.
