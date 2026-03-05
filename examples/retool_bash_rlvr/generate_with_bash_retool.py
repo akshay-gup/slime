@@ -86,7 +86,14 @@ def postprocess_predictions(prediction: str):
         try:
             import json
 
-            tool_call_data = json.loads(tool_call_match.group(1).replace("\n", "\\n"))
+            tool_call_str = tool_call_match.group(1)
+            try:
+                tool_call_data = json.loads(tool_call_str)
+            except json.JSONDecodeError:
+                # Some model outputs include raw newlines inside JSON string values.
+                # Retry with escaped newlines to salvage those cases.
+                tool_call_data = json.loads(tool_call_str.replace("\n", "\\n"))
+
             tool_name = tool_call_data.get("name")
             arguments = tool_call_data.get("arguments", {})
             if tool_name == "bash":
