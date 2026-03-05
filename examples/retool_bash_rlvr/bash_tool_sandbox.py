@@ -371,7 +371,8 @@ class ToolRegistry:
             "SLIME_BASH_MAIN_DIR": str(workdir),
             "SLIME_BASH_ROLLOUT_KEY": "" if rollout_key is None else str(rollout_key),
         }
-        return await self.bash_sandbox.execute_command(command, workdir=str(workdir), extra_env=extra_env)
+        async with SEMAPHORE:
+            return await self.bash_sandbox.execute_command(command, workdir=str(workdir), extra_env=extra_env)
 
 
 tool_registry = ToolRegistry()
