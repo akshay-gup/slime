@@ -217,12 +217,7 @@ async def reward_func(args, sample, **kwargs):
 
     solution_str = sample.prompt + sample.response
     ground_truth = sample.label if sample.label is not None else ""
-    num_turns = getattr(sample, "tool_call_count", 0)
-
     result = math_dapo_compute_score(solution_str, ground_truth, strict_box_verify=True)
-    if result["score"] < 0:
-        tool_call_reward = (num_turns - 2) / 2 * 0.1
-        result["score"] = min(-0.6, result["score"] + tool_call_reward)
     if result["pred"] is None:
         result["pred"] = ""
 
