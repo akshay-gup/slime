@@ -128,6 +128,7 @@ class ToolRegistry:
         self.base_workdir = Path(TOOL_CONFIGS["workdir"])
         self.num_rollout_envs = int(TOOL_CONFIGS["num_rollout_envs"])
         self.rollout_workdirs = self._prepare_rollout_workdirs()
+        self.rollout_locks = [asyncio.Lock() for _ in range(self.num_rollout_envs)]
         self.bash_sandbox = BashSandbox(
             timeout=TOOL_CONFIGS["bash_timeout"],
             max_output_chars=TOOL_CONFIGS["max_output_chars"],
@@ -165,7 +166,10 @@ class ToolRegistry:
             return 0
         if rollout_key is None:
             return 0
-        return hash(str(rollout_key)) % len(self.rollout_workdirs)
+        return int(rollout_key) % len(self.rollout_workdirs)
+
+    def get_rollout_lock(self, rollout_key: str | int | None) -> asyncio.Lock:
+        return self.rollout_locks[self._resolve_rollout_slot(rollout_key)]
 
     def _resolve_rollout_workdir(self, rollout_key: str | int | None) -> Path:
         return self.rollout_workdirs[self._resolve_rollout_slot(rollout_key)]
