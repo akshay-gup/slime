@@ -17,6 +17,7 @@ TOOL_CONFIGS = {
     "max_output_chars": 8192,
     "workdir": "/tmp/slime_bash_tool",
     "num_rollout_envs": 8,
+    "shared_workspace_across_prompts": True,
     "blocked_patterns": [
         "rm -rf /",
         ":(){ :|:&};:",
@@ -157,14 +158,30 @@ class ToolRegistry:
 
         return rollout_workdirs
 
-    def _resolve_rollout_workdir(self, rollout_key: str | int | None) -> Path:
+    def _resolve_rollout_slot(self, rollout_key: str | int | None) -> int:
+        """Select the rollout slot index used for workspace isolation."""
+
+        if TOOL_CONFIGS.get("shared_workspace_across_prompts", True):
+            return 0
         if rollout_key is None:
-            return self.rollout_workdirs[0]
-        return self.rollout_workdirs[hash(str(rollout_key)) % len(self.rollout_workdirs)]
+            return 0
+        return hash(str(rollout_key)) % len(self.rollout_workdirs)
+
+    def _resolve_rollout_workdir(self, rollout_key: str | int | None) -> Path:
+        return self.rollout_workdirs[self._resolve_rollout_slot(rollout_key)]
 
     def _resolve_rollout_base_dir(self, rollout_key: str | int | None) -> Path:
-        idx = 0 if rollout_key is None else hash(str(rollout_key)) % len(self.rollout_workdirs)
+        idx = self._resolve_rollout_slot(rollout_key)
         return self.base_workdir / "rollout_bases" / f"main_{idx}"
+
+    def prepare_rollout(self, rollout_key: str | int | None):
+        """Refresh a rollout workspace from the latest merged main workspace."""
+
+        main_dir = self.base_workdir / "main"
+        rollout_dir = self._resolve_rollout_workdir(rollout_key)
+        rollout_base_dir = self._resolve_rollout_base_dir(rollout_key)
+        self._copy_directory(main_dir, rollout_dir)
+        self._copy_directory(main_dir, rollout_base_dir)
 
     def _copy_directory(self, source: Path, target: Path):
         if target.exists():

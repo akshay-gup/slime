@@ -120,6 +120,12 @@ def _has_file_change(tool_response: str) -> bool:
     return "Files changed: yes" in tool_response
 
 
+def _resolve_rollout_key(sample: Sample) -> str | int | None:
+    if TOOL_CONFIGS.get("shared_workspace_across_prompts", True):
+        return "shared"
+    return sample.index if sample.index is not None else sample.group_index
+
+
 def _archive_and_reset_context_tokens(
     context_response_token_ids: list[int], archived_context_response_token_ids: list[list[int]]
 ) -> list[int]:
@@ -135,7 +141,8 @@ async def generate(args, sample: Sample, sampling_params) -> Sample:
     url = f"http://{args.sglang_router_ip}:{args.sglang_router_port}/generate"
 
     tool_specs = tool_registry.get_tool_specs()
-    rollout_key = sample.index if sample.index is not None else sample.group_index
+    rollout_key = _resolve_rollout_key(sample)
+    tool_registry.prepare_rollout(rollout_key)
     prompt = format_conversation_with_tools(prompt=sample.prompt, tools=tool_specs)
 
     prompt_tokens_ids = state.tokenizer(prompt, add_special_tokens=False)["input_ids"]
@@ -220,7 +227,7 @@ async def reward_func(args, sample, **kwargs):
     if not isinstance(sample, Sample):
         raise TypeError("Sample must be an instance of Sample class.")
 
-    rollout_key = sample.index if sample.index is not None else sample.group_index
+    rollout_key = _resolve_rollout_key(sample)
     rollout_dir = tool_registry._resolve_rollout_workdir(rollout_key)
     result_file = Path(rollout_dir) / REWARD_RESULT_FILE
     file_answer = ""
