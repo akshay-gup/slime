@@ -36,6 +36,7 @@ Tool outputs are appended as:
 - timeout (`bash_timeout`)
 - output cap (`max_output_chars`)
 - blocked substrings (e.g. `rm -rf /`, `mkfs`)
+- default workspace root is `/opt/NeMo/slime_bash_tool_workspace` (override with `SLIME_BASH_TOOL_WORKDIR`)
 
 ## Rollout workspace merge policy
 
