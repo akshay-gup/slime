@@ -58,6 +58,7 @@ def convert_samples_to_train_data(args, samples: list[Sample] | list[list[Sample
     expanded = {
         "tokens": [],
         "response_lengths": [],
+        "rewards": [],
         "raw_reward": [],
         "truncated": [],
         "sample_indices": [],
@@ -78,8 +79,10 @@ def convert_samples_to_train_data(args, samples: list[Sample] | list[list[Sample
         if not split_lengths:
             continue
 
-        reward_value = sample.get_reward_value(args)
-        split_reward = reward_value / len(split_lengths)
+        raw_reward_value = sample.get_reward_value(args)
+        normalized_reward_value = getattr(sample, "rewards", raw_reward_value)
+        split_raw_reward = raw_reward_value / len(split_lengths)
+        split_normalized_reward = normalized_reward_value / len(split_lengths)
 
         prompt_length = len(sample.tokens) - sample.response_length
         prompt_tokens = sample.tokens[:prompt_length]
@@ -109,7 +112,8 @@ def convert_samples_to_train_data(args, samples: list[Sample] | list[list[Sample
 
             expanded["tokens"].append(prompt_tokens + piece_response_tokens)
             expanded["response_lengths"].append(piece_length)
-            expanded["raw_reward"].append(split_reward)
+            expanded["raw_reward"].append(split_raw_reward)
+            expanded["rewards"].append(split_normalized_reward)
             expanded["truncated"].append(
                 1 if piece_idx == len(split_lengths) - 1 and sample.status == Sample.Status.TRUNCATED else 0
             )
@@ -137,10 +141,6 @@ def convert_samples_to_train_data(args, samples: list[Sample] | list[list[Sample
                 f"Split lengths ({split_lengths}) do not cover full response_length ({sample.response_length})."
             )
 
-    # Use split rewards directly. Group-wise normalization is skipped intentionally because
-    # each original sample can expand into a different number of pieces.
-    expanded["rewards"] = list(expanded["raw_reward"])
-
     if flat_samples[0].metadata and "raw_reward" in flat_samples[0].metadata:
         # Preserve external raw_reward override while still dividing by number of pieces.
         overridden_raw_rewards: list[float] = []
@@ -151,7 +151,6 @@ def convert_samples_to_train_data(args, samples: list[Sample] | list[list[Sample
             raw_reward = sample.metadata["raw_reward"] / len(split_lengths)
             overridden_raw_rewards.extend([raw_reward] * len(split_lengths))
         expanded["raw_reward"] = overridden_raw_rewards
-        expanded["rewards"] = list(overridden_raw_rewards)
 
     for key, values in optional_fields.items():
         if values:
