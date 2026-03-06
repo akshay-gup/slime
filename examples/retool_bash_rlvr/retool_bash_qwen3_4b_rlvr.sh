@@ -27,7 +27,7 @@ else
    HAS_NVLINK=0
 fi
 
-RAY_HEAD_IP="0.0.0.0"
+MASTER_ADDR="${MASTER_ADDR:-127.0.0.1}"
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" &>/dev/null && pwd)"
 REPO_ROOT="$(cd -- "${SCRIPT_DIR}/../.." &>/dev/null && pwd)"
@@ -136,7 +136,7 @@ MISC_ARGS=(
    --attention-backend flash
 )
 
-ray start --head --node-ip-address "${RAY_HEAD_IP}" --num-gpus "${NUM_GPUS}" --disable-usage-stats --dashboard-host=0.0.0.0 --dashboard-port="${RAY_DASHBOARD_PORT}"
+ray start --head --node-ip-address "${MASTER_ADDR}" --num-gpus "${NUM_GPUS}" --disable-usage-stats --dashboard-host=0.0.0.0 --dashboard-port="${RAY_DASHBOARD_PORT}"
 
 RUNTIME_ENV_JSON="{
   \"env_vars\": {
@@ -147,7 +147,7 @@ RUNTIME_ENV_JSON="{
   }
 }"
 
-ray job submit --address="http://${RAY_HEAD_IP}:${RAY_DASHBOARD_PORT}" \
+ray job submit --address="http://127.0.0.1:${RAY_DASHBOARD_PORT}" \
    --runtime-env-json="${RUNTIME_ENV_JSON}" \
    -- python3 "${REPO_ROOT}/train.py" \
    --actor-num-nodes "${ACTOR_NUM_NODES}" \
