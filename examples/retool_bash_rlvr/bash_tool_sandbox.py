@@ -1,11 +1,13 @@
 """Bash tool sandbox for multi-turn RLVR environments."""
 
 import asyncio
+import fcntl
 import hashlib
 import os
 import subprocess
 import shutil
 import tempfile
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
@@ -128,6 +130,7 @@ class ToolRegistry:
     def __init__(self):
         self.tools: dict[str, dict[str, Any]] = {}
         self.base_workdir = Path(TOOL_CONFIGS["workdir"])
+        self.main_lock_path = self.base_workdir / "main.lock"
         self.num_rollout_envs = int(TOOL_CONFIGS["num_rollout_envs"])
         self.rollout_workdirs = self._prepare_rollout_workdirs()
         self.rollout_locks = [asyncio.Lock() for _ in range(self.num_rollout_envs)]
@@ -186,8 +189,20 @@ class ToolRegistry:
         main_dir = self.base_workdir / "main"
         rollout_dir = self._resolve_rollout_workdir(rollout_key)
         rollout_base_dir = self._resolve_rollout_base_dir(rollout_key)
-        self._copy_directory(main_dir, rollout_dir)
-        self._copy_directory(main_dir, rollout_base_dir)
+
+        with self._main_workspace_lock():
+            self._copy_directory(main_dir, rollout_dir)
+            self._copy_directory(main_dir, rollout_base_dir)
+
+    @contextmanager
+    def _main_workspace_lock(self):
+        self.main_lock_path.parent.mkdir(parents=True, exist_ok=True)
+        with self.main_lock_path.open("a+", encoding="utf-8") as lock_file:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+            try:
+                yield
+            finally:
+                fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
 
     def _copy_directory(self, source: Path, target: Path):
         if target.exists():
@@ -273,63 +288,64 @@ class ToolRegistry:
         rollout_base_dir = self._resolve_rollout_base_dir(rollout_key)
         main_dir = self.base_workdir / "main"
 
-        reward_value = float(reward)
-        if reward_value <= 0:
+        with self._main_workspace_lock():
+            reward_value = float(reward)
+            if reward_value <= 0:
+                self._reset_rollout_dir(rollout_dir)
+                self._copy_directory(main_dir, rollout_base_dir)
+                return f"Discarded rollout changes for reward={reward_value:.4f}."
+
+            all_files = self._iter_files(main_dir) | self._iter_files(rollout_dir) | self._iter_files(rollout_base_dir)
+            conflict_count = 0
+            for rel in sorted(all_files):
+                base_content = self._read_bytes(rollout_base_dir, rel)
+                main_content = self._read_bytes(main_dir, rel)
+                rollout_content = self._read_bytes(rollout_dir, rel)
+
+                if rollout_content == base_content:
+                    continue
+
+                if main_content == base_content:
+                    self._write_bytes(main_dir, rel, rollout_content)
+                    continue
+
+                if main_content == rollout_content:
+                    continue
+
+                if base_content is not None and main_content is not None and rollout_content is not None:
+                    try:
+                        merged, has_conflict = self._merge_text_with_git(base_content, main_content, rollout_content)
+                        self._write_bytes(main_dir, rel, merged)
+                        if has_conflict:
+                            conflict_count += 1
+                            self._write_bytes(
+                                main_dir,
+                                rel.with_suffix(rel.suffix + ".main"),
+                                self._build_conflict_copy("main", main_content),
+                            )
+                            self._write_bytes(
+                                main_dir,
+                                rel.with_suffix(rel.suffix + ".rollout"),
+                                self._build_conflict_copy("rollout", rollout_content),
+                            )
+                        continue
+                    except UnicodeDecodeError:
+                        continue
+
+                conflict_count += 1
+                self._write_bytes(main_dir, rel.with_suffix(rel.suffix + ".main"), self._build_conflict_copy("main", main_content))
+                self._write_bytes(main_dir, rel.with_suffix(rel.suffix + ".rollout"), self._build_conflict_copy("rollout", rollout_content))
+
+            subprocess.run(["git", "add", "-A"], cwd=main_dir, check=True)
+            commit_msg = f"Merge rollout {rollout_key} (reward={reward_value:.4f}, conflicts={conflict_count})"
+            commit = subprocess.run(["git", "commit", "-m", commit_msg], cwd=main_dir, capture_output=True, text=True, check=False)
             self._reset_rollout_dir(rollout_dir)
             self._copy_directory(main_dir, rollout_base_dir)
-            return f"Discarded rollout changes for reward={reward_value:.4f}."
-
-        all_files = self._iter_files(main_dir) | self._iter_files(rollout_dir) | self._iter_files(rollout_base_dir)
-        conflict_count = 0
-        for rel in sorted(all_files):
-            base_content = self._read_bytes(rollout_base_dir, rel)
-            main_content = self._read_bytes(main_dir, rel)
-            rollout_content = self._read_bytes(rollout_dir, rel)
-
-            if rollout_content == base_content:
-                continue
-
-            if main_content == base_content:
-                self._write_bytes(main_dir, rel, rollout_content)
-                continue
-
-            if main_content == rollout_content:
-                continue
-
-            if base_content is not None and main_content is not None and rollout_content is not None:
-                try:
-                    merged, has_conflict = self._merge_text_with_git(base_content, main_content, rollout_content)
-                    self._write_bytes(main_dir, rel, merged)
-                    if has_conflict:
-                        conflict_count += 1
-                        self._write_bytes(
-                            main_dir,
-                            rel.with_suffix(rel.suffix + ".main"),
-                            self._build_conflict_copy("main", main_content),
-                        )
-                        self._write_bytes(
-                            main_dir,
-                            rel.with_suffix(rel.suffix + ".rollout"),
-                            self._build_conflict_copy("rollout", rollout_content),
-                        )
-                    continue
-                except UnicodeDecodeError:
-                    pass
-
-            conflict_count += 1
-            self._write_bytes(main_dir, rel.with_suffix(rel.suffix + ".main"), self._build_conflict_copy("main", main_content))
-            self._write_bytes(main_dir, rel.with_suffix(rel.suffix + ".rollout"), self._build_conflict_copy("rollout", rollout_content))
-
-        subprocess.run(["git", "add", "-A"], cwd=main_dir, check=True)
-        commit_msg = f"Merge rollout {rollout_key} (reward={reward_value:.4f}, conflicts={conflict_count})"
-        commit = subprocess.run(["git", "commit", "-m", commit_msg], cwd=main_dir, capture_output=True, text=True, check=False)
-        self._reset_rollout_dir(rollout_dir)
-        self._copy_directory(main_dir, rollout_base_dir)
-        if commit.returncode != 0 and "nothing to commit" in commit.stdout + commit.stderr:
-            return f"No merge changes from rollout reward={reward_value:.4f}."
-        if commit.returncode != 0:
-            return f"Merge failed to commit: {commit.stderr.strip()}"
-        return f"Merged rollout with reward={reward_value:.4f}; conflicts={conflict_count}."
+            if commit.returncode != 0 and "nothing to commit" in commit.stdout + commit.stderr:
+                return f"No merge changes from rollout reward={reward_value:.4f}."
+            if commit.returncode != 0:
+                return f"Merge failed to commit: {commit.stderr.strip()}"
+            return f"Merged rollout with reward={reward_value:.4f}; conflicts={conflict_count}."
 
     def _register_default_tools(self):
         self.register_tool(
