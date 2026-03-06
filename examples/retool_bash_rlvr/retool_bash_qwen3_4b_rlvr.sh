@@ -14,6 +14,10 @@ fi
 ACTOR_NUM_NODES="${ACTOR_NUM_NODES:-1}"
 ACTOR_NUM_GPUS_PER_NODE="${ACTOR_NUM_GPUS_PER_NODE:-${NUM_GPUS}}"
 ROLLOUT_NUM_GPUS_PER_ENGINE="${ROLLOUT_NUM_GPUS_PER_ENGINE:-}"
+RAY_DASHBOARD_PORT="${RAY_DASHBOARD_PORT:-8265}"
+
+DEFAULT_RAY_HEAD_IP="$(hostname -I 2>/dev/null | awk '{for (i = 1; i <= NF; ++i) if ($i != "127.0.0.1") {print $i; exit}}')"
+RAY_HEAD_IP="${RAY_HEAD_IP:-${DEFAULT_RAY_HEAD_IP:-127.0.0.1}}"
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" &>/dev/null && pwd)"
 REPO_ROOT="$(cd -- "${SCRIPT_DIR}/../.." &>/dev/null && pwd)"
@@ -58,7 +62,7 @@ if [ -n "${ROLLOUT_NUM_GPUS_PER_ENGINE}" ]; then
    SGLANG_ARGS+=(--rollout-num-gpus-per-engine "${ROLLOUT_NUM_GPUS_PER_ENGINE}")
 fi
 
-ray start --head --node-ip-address 127.0.0.1 --num-gpus "${NUM_GPUS}" --disable-usage-stats --dashboard-host=0.0.0.0 --dashboard-port=8265
+ray start --head --node-ip-address "${RAY_HEAD_IP}" --num-gpus "${NUM_GPUS}" --disable-usage-stats --dashboard-host=0.0.0.0 --dashboard-port="${RAY_DASHBOARD_PORT}"
 
 RUNTIME_ENV_JSON="{
   \"env_vars\": {
@@ -67,7 +71,7 @@ RUNTIME_ENV_JSON="{
   }
 }"
 
-ray job submit --address="http://127.0.0.1:8265" \
+ray job submit --address="http://${RAY_HEAD_IP}:${RAY_DASHBOARD_PORT}" \
    --runtime-env-json="${RUNTIME_ENV_JSON}" \
    -- python3 "${REPO_ROOT}/train.py" \
    --actor-num-nodes "${ACTOR_NUM_NODES}" \
