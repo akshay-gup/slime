@@ -17,6 +17,7 @@ from typing import Any
 logger = logging.getLogger(__name__)
 
 DEFAULT_WORKDIR = "/opt/NeMo/slime_bash_tool_workspace"
+REWARD_RESULT_FILE = "answer.md"
 
 TOOL_CONFIGS = {
     "max_turns": 16,
@@ -236,20 +237,32 @@ class ToolRegistry:
     def write_problem_file(self, rollout_key: str | int | None, problem_text: str):
         """Write the per-rollout task description file into the rollout workspace."""
 
-        rollout_dir = self._resolve_rollout_workdir(rollout_key)
-        problem_file = rollout_dir / TOOL_CONFIGS["problem_file"]
-        problem_file.write_text(problem_text, encoding="utf-8")
+        rollout_dirs = (
+            self.rollout_workdirs
+            if TOOL_CONFIGS.get("shared_workspace_across_prompts", True)
+            else [self._resolve_rollout_workdir(rollout_key)]
+        )
+        for rollout_dir in rollout_dirs:
+            problem_file = rollout_dir / TOOL_CONFIGS["problem_file"]
+            problem_file.write_text(problem_text, encoding="utf-8")
 
     def remove_ephemeral_files(self, rollout_key: str | int | None):
         """Remove per-rollout task and answer files before merge/discard."""
 
-        rollout_dir = self._resolve_rollout_workdir(rollout_key)
-        rollout_base_dir = self._resolve_rollout_base_dir(rollout_key)
+        if TOOL_CONFIGS.get("shared_workspace_across_prompts", True):
+            rollout_dirs = list(self.rollout_workdirs)
+            rollout_base_dirs = [self.base_workdir / "rollout_bases" / f"main_{idx}" for idx in range(self.num_rollout_envs)]
+        else:
+            rollout_dirs = [self._resolve_rollout_workdir(rollout_key)]
+            rollout_base_dirs = [self._resolve_rollout_base_dir(rollout_key)]
+
         main_dir = self.base_workdir / "main"
         for filename in [TOOL_CONFIGS["problem_file"], REWARD_RESULT_FILE]:
             rel = Path(filename)
-            self._write_bytes(rollout_dir, rel, None)
-            self._write_bytes(rollout_base_dir, rel, None)
+            for rollout_dir in rollout_dirs:
+                self._write_bytes(rollout_dir, rel, None)
+            for rollout_base_dir in rollout_base_dirs:
+                self._write_bytes(rollout_base_dir, rel, None)
             self._write_bytes(main_dir, rel, None)
 
     @contextmanager
