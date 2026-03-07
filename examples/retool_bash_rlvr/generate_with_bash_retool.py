@@ -79,11 +79,6 @@ def format_conversation_with_tools(prompt: str, tools: list[dict[str, Any]] = No
 
 
 def postprocess_predictions(prediction: str):
-    answer_pattern = r"Answer:\s*\\boxed\{((?:[^{}]|\{[^{}]*\})*)\}"
-    answer_match = re.search(answer_pattern, prediction, re.DOTALL)
-    if answer_match:
-        return "answer", answer_match.group(1).strip()
-
     tool_call_pattern = r"<tool_call>\s*(\{.*?\})\s*</tool_call>"
     tool_call_match = re.search(tool_call_pattern, prediction, re.DOTALL)
     if tool_call_match:
@@ -115,14 +110,14 @@ async def execute_predictions(prediction: str, rollout_key: str | int | None) ->
 
     if action == "bash":
         result = await tool_registry.execute_tool("bash", {"command": content}, rollout_key=rollout_key)
-        return f"\n\n<tool_response>\n{result}\n</tool_response>\n\n", False
-    if action == "answer":
-        return "", True
+        rollout_dir = tool_registry._resolve_rollout_workdir(rollout_key)
+        done = (Path(rollout_dir) / REWARD_RESULT_FILE).is_file()
+        return f"\n\n<tool_response>\n{result}\n</tool_response>\n\n", done
 
     return (
         "\nMy previous action is invalid. If I want to use the tool, I should emit "
         "<tool_call>{\"name\": \"bash\", \"arguments\": {\"command\": \"...\"}}</tool_call>. "
-        "If I want to finish, I should use Answer: \\boxed{...}. Let me try again.\n",
+        "Let me try again.\n",
         False,
     )
 
