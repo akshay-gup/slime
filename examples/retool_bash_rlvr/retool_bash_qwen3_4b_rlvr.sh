@@ -37,12 +37,22 @@ MEGATRON_LM_PATH="${MEGATRON_LM_PATH:-${REPO_ROOT}/../Megatron-LM}"
 HF_CHECKPOINT="${HF_CHECKPOINT:-${REPO_ROOT}/Qwen/Qwen3-4B-Instruct-2507}"
 REF_LOAD="${REF_LOAD:-${REPO_ROOT}/Qwen/Qwen3-4B-Instruct-2507_torch_dist}"
 SAVE_DIR="${SAVE_DIR:-${REPO_ROOT}/outputs/qwen3-4b-bash-rlvr}"
-PROMPT_DATA="${PROMPT_DATA:-${REPO_ROOT}/data/dapo-math-17k/dapo-math-17k.jsonl}"
+OPEN_R1_LEVEL5_DIR="${OPEN_R1_LEVEL5_DIR:-${REPO_ROOT}/data/open-r1/level_5}"
+PROMPT_DATA="${PROMPT_DATA:-}"
 EVAL_PROMPT_DATA="${EVAL_PROMPT_DATA:-${REPO_ROOT}/data/aime-2024/aime-2024.jsonl}"
-WANDB_PROJECT="${WANDB_PROJECT:-slime-dapo}"
+WANDB_PROJECT="${WANDB_PROJECT:-slime-open-r1}"
 WANDB_GROUP="${WANDB_GROUP:-qwen3-4B-bash-rlvr}"
 SLIME_BASH_TOOL_WORKDIR="${SLIME_BASH_TOOL_WORKDIR:-/opt/NeMo/slime_bash_tool_workspace}"
 SLIME_BASH_NUM_ROLLOUT_ENVS="${SLIME_BASH_NUM_ROLLOUT_ENVS:-${NUM_GPUS}}"
+
+if [ -z "${PROMPT_DATA}" ]; then
+   PROMPT_DATA="$(find "${OPEN_R1_LEVEL5_DIR}" -maxdepth 1 -type f -name '*.parquet' | sort | head -n 1)"
+fi
+
+if [ -z "${PROMPT_DATA}" ]; then
+   echo "ERROR: No parquet file found in OPEN_R1_LEVEL5_DIR=${OPEN_R1_LEVEL5_DIR}. Set PROMPT_DATA explicitly." >&2
+   exit 1
+fi
 
 CKPT_ARGS=(
    --hf-checkpoint "${HF_CHECKPOINT}"
@@ -55,7 +65,7 @@ CKPT_ARGS=(
 ROLLOUT_ARGS=(
    --prompt-data "${PROMPT_DATA}"
    --input-key prompt
-   --label-key label
+   --label-key solution
    --reward-key score
    --num-rollout 3000
    --rollout-batch-size 32
