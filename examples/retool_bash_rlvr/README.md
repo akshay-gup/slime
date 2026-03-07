@@ -48,6 +48,11 @@ Each rollout runs in an isolated copy of `workdir/main`. After reward is compute
 
 By default (`shared_workspace_across_prompts=True`), all prompts share one bash workspace lineage:
 
+- at rollout start, the current sample problem is written to `problem.txt` inside the rollout workspace
+- system prompt only gives general environment instructions; the model reads `problem.txt` via bash commands
+- before merge/discard in reward finalization, `problem.txt` is removed from rollout/base/main workspaces
+
+
 - every sample starts by refreshing its rollout copy from the latest `workdir/main`
 - one shared rollout slot is used for all prompts
 - split/merge logic still happens per sample (branch, score, merge-or-discard)

@@ -19,6 +19,7 @@ except ImportError as e:
 from bash_tool_sandbox import TOOL_CONFIGS, tool_registry
 
 REWARD_RESULT_FILE = "reward_result.txt"
+PROBLEM_FILE = TOOL_CONFIGS["problem_file"]
 
 TOOL_TEMPLATE = """<|im_start|>system
 {%- if messages[0]['role'] == 'system' %}
@@ -63,7 +64,9 @@ def format_conversation_with_tools(prompt: str, tools: list[dict[str, Any]] = No
         {
             "role": "system",
             "content": (
-                "You are a helpful assistant. Use the bash tool for computations, file inspection, "
+                "You are a helpful assistant working in a bash environment. "
+                f"At the start of each rollout, the task is written to `{PROBLEM_FILE}` in the current working directory. "
+                "Read that file to understand the problem statement. Use the bash tool for computations, file inspection, "
                 "and shell-based reasoning when useful. Write your final computed answer to "
                 f"`{REWARD_RESULT_FILE}` in the working directory before finishing. "
                 "Return final answers using Answer: \\boxed{...}."
@@ -153,7 +156,8 @@ async def generate(args, sample: Sample, sampling_params) -> Sample:
 
     async with rollout_lock:
         tool_registry.prepare_rollout(rollout_key)
-        prompt = format_conversation_with_tools(prompt=sample.prompt, tools=tool_specs)
+        tool_registry.write_problem_file(rollout_key=rollout_key, problem_text=sample.prompt)
+        prompt = format_conversation_with_tools(prompt="Please work on the task in the environment.", tools=tool_specs)
 
         prompt_tokens_ids = state.tokenizer(prompt, add_special_tokens=False)["input_ids"]
         response = ""
