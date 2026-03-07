@@ -3,13 +3,18 @@
 import asyncio
 import fcntl
 import hashlib
+import json
+import logging
 import os
 import subprocess
 import shutil
 import tempfile
+import time
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 DEFAULT_WORKDIR = "/opt/NeMo/slime_bash_tool_workspace"
 
@@ -23,6 +28,7 @@ TOOL_CONFIGS = {
     "num_rollout_envs": 8,
     "shared_workspace_across_prompts": True,
     "problem_file": "task.md",
+    "trace_dir": os.environ.get("SLIME_BASH_TRACE_DIR", ""),
     "blocked_patterns": [
         "rm -rf /",
         ":(){ :|:&};:",
@@ -33,6 +39,31 @@ TOOL_CONFIGS = {
 }
 
 SEMAPHORE = asyncio.Semaphore(TOOL_CONFIGS["tool_concurrency"])
+
+
+class RolloutTracer:
+    """Write structured JSONL trace entries for a single rollout."""
+
+    def __init__(self, trace_dir: Path, rollout_key: str | int | None):
+        self.rollout_key = rollout_key
+        self.trace_file = trace_dir / f"rollout_{rollout_key}_{int(time.time())}.jsonl"
+        trace_dir.mkdir(parents=True, exist_ok=True)
+
+    def log(self, step: str, **kwargs):
+        entry = {"ts": time.time(), "rollout_key": str(self.rollout_key), "step": step, **kwargs}
+        try:
+            with open(self.trace_file, "a") as f:
+                f.write(json.dumps(entry, default=str) + "\n")
+        except Exception:
+            logger.warning("Failed to write trace entry: %s", entry)
+
+
+def create_tracer(rollout_key: str | int | None) -> RolloutTracer | None:
+    """Create a tracer if SLIME_BASH_TRACE_DIR is set, otherwise return None."""
+    trace_dir = TOOL_CONFIGS.get("trace_dir", "")
+    if not trace_dir:
+        return None
+    return RolloutTracer(Path(trace_dir), rollout_key)
 
 
 def _truncate(output: str, max_chars: int) -> str:
@@ -88,8 +119,10 @@ class BashSandbox:
         command = command.strip()
         for pattern in self.blocked_patterns:
             if pattern in command:
+                logger.warning("Command blocked by safety policy: %.200s", command)
                 return "Error: command blocked by safety policy."
 
+        logger.debug("Executing in %s: %.200s", workdir, command)
         Path(workdir).mkdir(parents=True, exist_ok=True)
         before_fingerprint = self._directory_fingerprint(workdir)
 
@@ -103,12 +136,14 @@ class BashSandbox:
             )
             stdout_bytes, stderr_bytes = await asyncio.wait_for(proc.communicate(), timeout=self.timeout)
         except asyncio.TimeoutError:
+            logger.warning("Command timed out after %ds: %.200s", self.timeout, command)
             return f"Error: command timed out after {self.timeout}s."
         except Exception as e:
             return f"Error: {e}"
 
         stdout = stdout_bytes.decode("utf-8", errors="replace").strip()
         stderr = stderr_bytes.decode("utf-8", errors="replace").strip()
+        logger.debug("Exit code=%s, stdout=%d bytes, stderr=%d bytes", proc.returncode, len(stdout_bytes), len(stderr_bytes))
 
         parts = []
         if stdout:
@@ -118,8 +153,10 @@ class BashSandbox:
         if proc.returncode != 0:
             parts.append(f"Exit code: {proc.returncode}")
 
-        if self._has_file_changes(before_fingerprint, self._directory_fingerprint(workdir)):
+        file_changed = self._has_file_changes(before_fingerprint, self._directory_fingerprint(workdir))
+        if file_changed:
             parts.append("Files changed: yes")
+            logger.debug("File changes detected in %s", workdir)
 
         result = "\n".join(parts) if parts else "(no output)"
         return _truncate(result, self.max_output_chars)
@@ -190,6 +227,7 @@ class ToolRegistry:
         main_dir = self.base_workdir / "main"
         rollout_dir = self._resolve_rollout_workdir(rollout_key)
         rollout_base_dir = self._resolve_rollout_base_dir(rollout_key)
+        logger.info("[rollout=%s] Preparing workspace: %s", rollout_key, rollout_dir)
 
         with self._main_workspace_lock():
             self._copy_directory(main_dir, rollout_dir)
@@ -311,10 +349,13 @@ class ToolRegistry:
         with self._main_workspace_lock():
             self.remove_ephemeral_files(rollout_key)
             reward_value = float(reward)
+            logger.info("[rollout=%s] Finalizing: reward=%.4f", rollout_key, reward_value)
             if reward_value <= 0:
                 self._reset_rollout_dir(rollout_dir)
                 self._copy_directory(main_dir, rollout_base_dir)
-                return f"Discarded rollout changes for reward={reward_value:.4f}."
+                msg = f"Discarded rollout changes for reward={reward_value:.4f}."
+                logger.info("[rollout=%s] %s", rollout_key, msg)
+                return msg
 
             all_files = self._iter_files(main_dir) | self._iter_files(rollout_dir) | self._iter_files(rollout_base_dir)
             conflict_count = 0
@@ -357,16 +398,24 @@ class ToolRegistry:
                 self._write_bytes(main_dir, rel.with_suffix(rel.suffix + ".main"), self._build_conflict_copy("main", main_content))
                 self._write_bytes(main_dir, rel.with_suffix(rel.suffix + ".rollout"), self._build_conflict_copy("rollout", rollout_content))
 
+            logger.info("[rollout=%s] Merge complete: %d files examined, %d conflicts", rollout_key, len(all_files), conflict_count)
             subprocess.run(["git", "add", "-A"], cwd=main_dir, check=True)
             commit_msg = f"Merge rollout {rollout_key} (reward={reward_value:.4f}, conflicts={conflict_count})"
             commit = subprocess.run(["git", "commit", "-m", commit_msg], cwd=main_dir, capture_output=True, text=True, check=False)
+            logger.debug("[rollout=%s] Git commit returncode=%d, stdout=%.200s", rollout_key, commit.returncode, commit.stdout or "")
             self._reset_rollout_dir(rollout_dir)
             self._copy_directory(main_dir, rollout_base_dir)
             if commit.returncode != 0 and "nothing to commit" in commit.stdout + commit.stderr:
-                return f"No merge changes from rollout reward={reward_value:.4f}."
+                msg = f"No merge changes from rollout reward={reward_value:.4f}."
+                logger.info("[rollout=%s] %s", rollout_key, msg)
+                return msg
             if commit.returncode != 0:
-                return f"Merge failed to commit: {commit.stderr.strip()}"
-            return f"Merged rollout with reward={reward_value:.4f}; conflicts={conflict_count}."
+                msg = f"Merge failed to commit: {commit.stderr.strip()}"
+                logger.warning("[rollout=%s] %s", rollout_key, msg)
+                return msg
+            msg = f"Merged rollout with reward={reward_value:.4f}; conflicts={conflict_count}."
+            logger.info("[rollout=%s] %s", rollout_key, msg)
+            return msg
 
     def _register_default_tools(self):
         self.register_tool(

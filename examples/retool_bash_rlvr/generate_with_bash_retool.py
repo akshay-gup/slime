@@ -1,3 +1,4 @@
+import logging
 import re
 from pathlib import Path
 from typing import Any
@@ -16,7 +17,9 @@ try:
 except ImportError as e:
     raise ImportError("MathDapo is not installed") from e
 
-from bash_tool_sandbox import TOOL_CONFIGS, tool_registry
+from bash_tool_sandbox import TOOL_CONFIGS, create_tracer, tool_registry
+
+logger = logging.getLogger(__name__)
 
 REWARD_RESULT_FILE = "answer.md"
 PROBLEM_FILE = TOOL_CONFIGS["problem_file"]
@@ -75,7 +78,9 @@ def format_conversation_with_tools(prompt: str, tools: list[dict[str, Any]] = No
         },
         {"role": "user", "content": prompt},
     ]
-    return template.render(messages=messages, tools=tools or [])
+    rendered = template.render(messages=messages, tools=tools or [])
+    logger.debug("System prompt rendered (%d chars): %.500s", len(rendered), rendered)
+    return rendered
 
 
 def postprocess_predictions(prediction: str):
@@ -98,22 +103,33 @@ def postprocess_predictions(prediction: str):
             if tool_name == "bash":
                 command = arguments.get("command", "")
                 if command.strip():
+                    logger.debug("Parsed bash tool_call: %.200s", command)
                     return "bash", command
         except (json.JSONDecodeError, KeyError, AttributeError):
-            pass
+            logger.debug("Failed to parse tool_call JSON from: %.200s", prediction)
 
+    logger.debug("No valid tool_call in prediction: %.200s", prediction)
     return None, ""
 
 
-async def execute_predictions(prediction: str, rollout_key: str | int | None) -> tuple[str, bool]:
+async def execute_predictions(prediction: str, rollout_key: str | int | None, tracer=None) -> tuple[str, bool]:
     action, content = postprocess_predictions(prediction)
 
     if action == "bash":
+        logger.info("[rollout=%s] Executing bash: %.200s", rollout_key, content)
+        if tracer:
+            tracer.log("bash_execute", command=content[:300])
         result = await tool_registry.execute_tool("bash", {"command": content}, rollout_key=rollout_key)
         rollout_dir = tool_registry._resolve_rollout_workdir(rollout_key)
         done = (Path(rollout_dir) / REWARD_RESULT_FILE).is_file()
+        logger.info("[rollout=%s] Bash result (%d chars), done=%s", rollout_key, len(result), done)
+        if tracer:
+            tracer.log("bash_result", result_length=len(result), done=done, result_preview=result[:500])
         return f"\n\n<tool_response>\n{result}\n</tool_response>\n\n", done
 
+    logger.info("[rollout=%s] Invalid tool call (action=%s)", rollout_key, action)
+    if tracer:
+        tracer.log("invalid_tool_call", action=str(action), prediction_preview=prediction[:300])
     return (
         "\nMy previous action is invalid. If I want to use the tool, I should emit "
         "<tool_call>{\"name\": \"bash\", \"arguments\": {\"command\": \"...\"}}</tool_call>. "
@@ -149,6 +165,11 @@ async def generate(args, sample: Sample, sampling_params) -> Sample:
     tool_specs = tool_registry.get_tool_specs()
     rollout_key = _resolve_rollout_key(sample)
     rollout_lock = tool_registry.get_rollout_lock(rollout_key)
+    tracer = create_tracer(rollout_key)
+
+    logger.info("[rollout=%s] Starting generate for sample index=%s, prompt: %.150s", rollout_key, sample.index, sample.prompt)
+    if tracer:
+        tracer.log("generate_start", sample_index=sample.index, prompt_preview=sample.prompt[:300])
 
     async with rollout_lock:
         tool_registry.prepare_rollout(rollout_key)
@@ -156,6 +177,9 @@ async def generate(args, sample: Sample, sampling_params) -> Sample:
         prompt = format_conversation_with_tools(prompt="Please work on the task in the environment.", tools=tool_specs)
 
         prompt_tokens_ids = state.tokenizer(prompt, add_special_tokens=False)["input_ids"]
+        logger.info("[rollout=%s] Prompt tokenized: %d tokens", rollout_key, len(prompt_tokens_ids))
+        if tracer:
+            tracer.log("system_prompt", prompt_length=len(prompt), prompt_tokens=len(prompt_tokens_ids), content=prompt[:2000])
         response = ""
         response_token_ids = []
         loss_masks = []
@@ -164,7 +188,11 @@ async def generate(args, sample: Sample, sampling_params) -> Sample:
         tool_call_count = 0
         saw_length_stop = False
 
-        for _ in range(TOOL_CONFIGS["max_turns"]):
+        for turn_num in range(TOOL_CONFIGS["max_turns"]):
+            logger.info("[rollout=%s] Turn %d/%d, context_tokens=%d, tool_calls=%d", rollout_key, turn_num + 1, TOOL_CONFIGS["max_turns"], len(prompt_tokens_ids + context_response_token_ids), tool_call_count)
+            if tracer:
+                tracer.log("turn_start", turn=turn_num + 1, context_tokens=len(prompt_tokens_ids + context_response_token_ids), tool_calls_so_far=tool_call_count)
+
             current_token_ids = prompt_tokens_ids + context_response_token_ids
             payload = {
                 "input_ids": current_token_ids,
@@ -173,13 +201,21 @@ async def generate(args, sample: Sample, sampling_params) -> Sample:
             }
 
             output = await post(url, payload)
-            if output["meta_info"]["finish_reason"]["type"] == "abort":
+            finish_reason = output["meta_info"]["finish_reason"]["type"]
+            if finish_reason == "abort":
+                logger.warning("[rollout=%s] Generation aborted", rollout_key)
+                if tracer:
+                    tracer.log("abort", turn=turn_num + 1)
                 sample.status = Sample.Status.ABORTED
                 return sample
 
             cur_response_token_ids = [item[1] for item in output["meta_info"]["output_token_logprobs"]]
             cur_response = state.tokenizer.decode(cur_response_token_ids)
             cur_log_probs = [item[0] for item in output["meta_info"]["output_token_logprobs"]]
+
+            logger.info("[rollout=%s] Turn %d: %d new tokens, finish_reason=%s", rollout_key, turn_num + 1, len(cur_response_token_ids), finish_reason)
+            if tracer:
+                tracer.log("model_output", turn=turn_num + 1, new_tokens=len(cur_response_token_ids), finish_reason=finish_reason, response_preview=cur_response[:500])
 
             if sample.rollout_log_probs is None:
                 sample.rollout_log_probs = []
@@ -190,12 +226,18 @@ async def generate(args, sample: Sample, sampling_params) -> Sample:
             context_response_token_ids += cur_response_token_ids
             loss_masks += [1] * len(cur_response_token_ids)
 
-            if output["meta_info"]["finish_reason"]["type"] == "length":
+            if finish_reason == "length":
+                logger.info("[rollout=%s] Hit length limit, stopping", rollout_key)
+                if tracer:
+                    tracer.log("length_stop", turn=turn_num + 1)
                 saw_length_stop = True
                 break
 
-            next_obs, done = await execute_predictions(cur_response, rollout_key=rollout_key)
+            next_obs, done = await execute_predictions(cur_response, rollout_key=rollout_key, tracer=tracer)
             if done:
+                logger.info("[rollout=%s] Answer file detected, stopping", rollout_key)
+                if tracer:
+                    tracer.log("answer_found", turn=turn_num + 1)
                 break
 
             if "<tool_response>" in next_obs:
@@ -211,11 +253,17 @@ async def generate(args, sample: Sample, sampling_params) -> Sample:
             if _has_file_change(next_obs):
                 # When files are modified, clear ongoing context for the next model step.
                 # Keep the dropped context for downstream data pairing.
+                logger.info("[rollout=%s] File change detected, archiving context (%d tokens)", rollout_key, len(context_response_token_ids))
+                if tracer:
+                    tracer.log("context_reset", turn=turn_num + 1, archived_tokens=len(context_response_token_ids))
                 context_response_token_ids = _archive_and_reset_context_tokens(
                     context_response_token_ids, archived_context_response_token_ids
                 )
 
             if tool_call_count >= TOOL_CONFIGS["max_tool_calls"]:
+                logger.info("[rollout=%s] Max tool calls (%d) reached, stopping", rollout_key, TOOL_CONFIGS["max_tool_calls"])
+                if tracer:
+                    tracer.log("max_tool_calls", turn=turn_num + 1, max_calls=TOOL_CONFIGS["max_tool_calls"])
                 break
 
         sample.tokens = prompt_tokens_ids + response_token_ids
@@ -230,6 +278,10 @@ async def generate(args, sample: Sample, sampling_params) -> Sample:
         elif output["meta_info"]["finish_reason"]["type"] == "stop":
             sample.status = Sample.Status.COMPLETED
 
+        logger.info("[rollout=%s] Generate complete: status=%s, tool_calls=%d, response_tokens=%d, context_resets=%d", rollout_key, sample.status, tool_call_count, len(response_token_ids), len(archived_context_response_token_ids))
+        if tracer:
+            tracer.log("generate_end", status=str(sample.status), tool_calls=tool_call_count, response_tokens=len(response_token_ids), context_resets=len(archived_context_response_token_ids))
+
     return sample
 
 
@@ -239,6 +291,7 @@ async def reward_func(args, sample, **kwargs):
 
     rollout_key = _resolve_rollout_key(sample)
     rollout_lock = tool_registry.get_rollout_lock(rollout_key)
+    tracer = create_tracer(rollout_key)
 
     async with rollout_lock:
         rollout_dir = tool_registry._resolve_rollout_workdir(rollout_key)
@@ -246,6 +299,10 @@ async def reward_func(args, sample, **kwargs):
         file_answer = ""
         if result_file.exists() and result_file.is_file():
             file_answer = result_file.read_text(encoding="utf-8", errors="replace").strip()
+
+        logger.info("[rollout=%s] Answer file %s: %s", rollout_key, "found" if file_answer else "NOT found", result_file)
+        if tracer:
+            tracer.log("reward_answer_file", exists=bool(file_answer), content=file_answer[:500] if file_answer else "")
 
         if file_answer:
             solution_str = file_answer
@@ -257,9 +314,17 @@ async def reward_func(args, sample, **kwargs):
         if result["pred"] is None:
             result["pred"] = ""
 
+        logger.info("[rollout=%s] Reward: score=%s, pred=%.100s, ground_truth=%.100s", rollout_key, result["score"], str(result["pred"]), str(ground_truth))
+        if tracer:
+            tracer.log("reward_computed", score=result["score"], pred=str(result["pred"])[:200], ground_truth=str(ground_truth)[:200])
+
         result["reward_result_file"] = str(result_file)
         result["reward_result_content"] = file_answer
         merge_message = tool_registry.finalize_rollout(rollout_key=rollout_key, reward=result["score"])
         result["merge_message"] = merge_message
+
+        logger.info("[rollout=%s] Finalize: %s", rollout_key, merge_message)
+        if tracer:
+            tracer.log("merge_result", message=merge_message)
 
     return result
