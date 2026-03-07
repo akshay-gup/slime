@@ -59,6 +59,6 @@ By default (`shared_workspace_across_prompts=True`), all prompts share one bash 
 
 By default, `retool_bash_qwen3_4b_rlvr.sh` sets `SLIME_BASH_NUM_ROLLOUT_ENVS=${NUM_GPUS}` so one rollout slot is available per GPU.
 
-The script also sets `--eval-label-key` via `EVAL_LABEL_KEY` (default: `answer`) to match the AIME eval JSON schema.
+The script also sets `--eval-label-key` via `EVAL_LABEL_KEY` (default: `label`) to match the AIME eval JSON schema.
 
 This behavior is implemented in `bash_tool_sandbox.py` via `ToolRegistry.prepare_rollout()` and `ToolRegistry.finalize_rollout()`, called from `generate()` and `reward_func()`.
