@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import logging
 from collections.abc import Iterable
 
 from slime.utils.types import Sample
+
+logger = logging.getLogger(__name__)
 
 
 def _flatten_samples(samples: list[Sample] | list[list[Sample]]) -> list[Sample]:
@@ -156,4 +159,5 @@ def convert_samples_to_train_data(args, samples: list[Sample] | list[list[Sample
         if values:
             expanded[key] = values
 
+    logger.info("Sample expansion: %d samples -> %d train items", len(flat_samples), len(expanded["tokens"]))
     return expanded
