@@ -17,6 +17,7 @@ from typing import Any
 logger = logging.getLogger(__name__)
 
 DEFAULT_WORKDIR = "/opt/NeMo/slime_bash_tool_workspace"
+DEFAULT_TRACE_DIR = "/opt/NeMo/slime_bash_tool_traces"
 REWARD_RESULT_FILE = "answer.md"
 
 TOOL_CONFIGS = {
@@ -30,7 +31,7 @@ TOOL_CONFIGS = {
     "shared_workspace_across_prompts": os.environ.get("SLIME_BASH_SHARED_WORKSPACE_ACROSS_PROMPTS", "true").lower()
     in ("1", "true", "yes", "on"),
     "problem_file": "task.md",
-    "trace_dir": os.environ.get("SLIME_BASH_TRACE_DIR", ""),
+    "trace_dir": os.environ.get("SLIME_BASH_TRACE_DIR", DEFAULT_TRACE_DIR),
     "blocked_patterns": [
         "rm -rf /",
         ":(){ :|:&};:",
@@ -61,7 +62,7 @@ class RolloutTracer:
 
 
 def create_tracer(rollout_key: str | int | None) -> RolloutTracer | None:
-    """Create a tracer if SLIME_BASH_TRACE_DIR is set, otherwise return None."""
+    """Create a tracer using SLIME_BASH_TRACE_DIR (or the default trace directory)."""
     trace_dir = TOOL_CONFIGS.get("trace_dir", "")
     if not trace_dir:
         return None
