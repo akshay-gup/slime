@@ -22,6 +22,7 @@ TOOL_CONFIGS = {
     "workdir": os.environ.get("SLIME_BASH_TOOL_WORKDIR", DEFAULT_WORKDIR),
     "num_rollout_envs": 8,
     "shared_workspace_across_prompts": True,
+    "problem_file": "problem.txt",
     "blocked_patterns": [
         "rm -rf /",
         ":(){ :|:&};:",
@@ -194,6 +195,25 @@ class ToolRegistry:
             self._copy_directory(main_dir, rollout_dir)
             self._copy_directory(main_dir, rollout_base_dir)
 
+    def write_problem_file(self, rollout_key: str | int | None, problem_text: str):
+        """Write the per-rollout task description file into the rollout workspace."""
+
+        rollout_dir = self._resolve_rollout_workdir(rollout_key)
+        problem_file = rollout_dir / TOOL_CONFIGS["problem_file"]
+        problem_file.write_text(problem_text, encoding="utf-8")
+
+    def remove_problem_file(self, rollout_key: str | int | None):
+        """Remove the per-rollout task description file before merge/discard."""
+
+        rollout_dir = self._resolve_rollout_workdir(rollout_key)
+        rollout_base_dir = self._resolve_rollout_base_dir(rollout_key)
+        main_dir = self.base_workdir / "main"
+        problem_file = Path(TOOL_CONFIGS["problem_file"])
+
+        self._write_bytes(rollout_dir, problem_file, None)
+        self._write_bytes(rollout_base_dir, problem_file, None)
+        self._write_bytes(main_dir, problem_file, None)
+
     @contextmanager
     def _main_workspace_lock(self):
         self.main_lock_path.parent.mkdir(parents=True, exist_ok=True)
@@ -289,6 +309,7 @@ class ToolRegistry:
         main_dir = self.base_workdir / "main"
 
         with self._main_workspace_lock():
+            self.remove_problem_file(rollout_key)
             reward_value = float(reward)
             if reward_value <= 0:
                 self._reset_rollout_dir(rollout_dir)
