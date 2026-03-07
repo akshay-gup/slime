@@ -26,8 +26,9 @@ TOOL_CONFIGS = {
     "bash_timeout": 30,
     "max_output_chars": 8192,
     "workdir": os.environ.get("SLIME_BASH_TOOL_WORKDIR", DEFAULT_WORKDIR),
-    "num_rollout_envs": 8,
-    "shared_workspace_across_prompts": True,
+    "num_rollout_envs": int(os.environ.get("SLIME_BASH_NUM_ROLLOUT_ENVS", "8")),
+    "shared_workspace_across_prompts": os.environ.get("SLIME_BASH_SHARED_WORKSPACE_ACROSS_PROMPTS", "true").lower()
+    in ("1", "true", "yes", "on"),
     "problem_file": "task.md",
     "trace_dir": os.environ.get("SLIME_BASH_TRACE_DIR", ""),
     "blocked_patterns": [
@@ -206,11 +207,16 @@ class ToolRegistry:
     def _resolve_rollout_slot(self, rollout_key: str | int | None) -> int:
         """Select the rollout slot index used for workspace isolation."""
 
-        if TOOL_CONFIGS.get("shared_workspace_across_prompts", True):
-            return 0
         if rollout_key is None:
             return 0
-        return int(rollout_key) % len(self.rollout_workdirs)
+
+        if isinstance(rollout_key, int):
+            return rollout_key % len(self.rollout_workdirs)
+
+        if isinstance(rollout_key, str) and rollout_key.isdigit():
+            return int(rollout_key) % len(self.rollout_workdirs)
+
+        return hash(str(rollout_key)) % len(self.rollout_workdirs)
 
     def get_rollout_lock(self, rollout_key: str | int | None) -> asyncio.Lock:
         return self.rollout_locks[self._resolve_rollout_slot(rollout_key)]
@@ -237,24 +243,15 @@ class ToolRegistry:
     def write_problem_file(self, rollout_key: str | int | None, problem_text: str):
         """Write the per-rollout task description file into the rollout workspace."""
 
-        rollout_dirs = (
-            self.rollout_workdirs
-            if TOOL_CONFIGS.get("shared_workspace_across_prompts", True)
-            else [self._resolve_rollout_workdir(rollout_key)]
-        )
-        for rollout_dir in rollout_dirs:
-            problem_file = rollout_dir / TOOL_CONFIGS["problem_file"]
-            problem_file.write_text(problem_text, encoding="utf-8")
+        rollout_dir = self._resolve_rollout_workdir(rollout_key)
+        problem_file = rollout_dir / TOOL_CONFIGS["problem_file"]
+        problem_file.write_text(problem_text, encoding="utf-8")
 
     def remove_ephemeral_files(self, rollout_key: str | int | None):
         """Remove per-rollout task and answer files before merge/discard."""
 
-        if TOOL_CONFIGS.get("shared_workspace_across_prompts", True):
-            rollout_dirs = list(self.rollout_workdirs)
-            rollout_base_dirs = [self.base_workdir / "rollout_bases" / f"main_{idx}" for idx in range(self.num_rollout_envs)]
-        else:
-            rollout_dirs = [self._resolve_rollout_workdir(rollout_key)]
-            rollout_base_dirs = [self._resolve_rollout_base_dir(rollout_key)]
+        rollout_dirs = [self._resolve_rollout_workdir(rollout_key)]
+        rollout_base_dirs = [self._resolve_rollout_base_dir(rollout_key)]
 
         main_dir = self.base_workdir / "main"
         for filename in [TOOL_CONFIGS["problem_file"], REWARD_RESULT_FILE]:

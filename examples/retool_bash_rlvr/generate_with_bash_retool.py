@@ -151,6 +151,10 @@ def _has_file_change(tool_response: str) -> bool:
 
 def _resolve_rollout_key(sample: Sample) -> str | int | None:
     if TOOL_CONFIGS.get("shared_workspace_across_prompts", True):
+        if sample.index is not None:
+            return sample.index
+        if sample.group_index is not None:
+            return sample.group_index
         return "shared"
     return sample.index if sample.index is not None else sample.group_index
 
