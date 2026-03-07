@@ -253,7 +253,7 @@ async def reward_func(args, sample, **kwargs):
             file_answer = result_file.read_text(encoding="utf-8", errors="replace").strip()
 
         if file_answer:
-            solution_str = f"Answer: \\boxed{{{file_answer}}}"
+            solution_str = file_answer
         else:
             solution_str = ""
 
