@@ -179,6 +179,15 @@ async def execute_predictions(prediction: str, rollout_key: str | int | None, tr
             tracer.log("bash_result", result_length=len(result), done=done, result_preview=result[:500])
         return f"\n\n<tool_response>\n{result}\n</tool_response>\n\n", done
 
+    if action is None:
+        logger.debug("[rollout=%s] No tool call emitted; checking for answer file", rollout_key)
+        if tracer:
+            tracer.log("no_tool_call", prediction_preview=prediction[:300])
+        rollout_dir = tool_registry._resolve_rollout_workdir(rollout_key)
+        if (Path(rollout_dir) / REWARD_RESULT_FILE).is_file():
+            return "", True
+        return (f"\nUse bash to write your answer to `{REWARD_RESULT_FILE}`.\n", False)
+
     logger.info("[rollout=%s] Invalid tool call (action=%s)", rollout_key, action)
     if tracer:
         tracer.log("invalid_tool_call", action=str(action), prediction_preview=prediction[:300])
