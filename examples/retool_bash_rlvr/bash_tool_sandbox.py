@@ -202,17 +202,17 @@ class ToolRegistry:
         problem_file = rollout_dir / TOOL_CONFIGS["problem_file"]
         problem_file.write_text(problem_text, encoding="utf-8")
 
-    def remove_problem_file(self, rollout_key: str | int | None):
-        """Remove the per-rollout task description file before merge/discard."""
+    def remove_ephemeral_files(self, rollout_key: str | int | None):
+        """Remove per-rollout task and answer files before merge/discard."""
 
         rollout_dir = self._resolve_rollout_workdir(rollout_key)
         rollout_base_dir = self._resolve_rollout_base_dir(rollout_key)
         main_dir = self.base_workdir / "main"
-        problem_file = Path(TOOL_CONFIGS["problem_file"])
-
-        self._write_bytes(rollout_dir, problem_file, None)
-        self._write_bytes(rollout_base_dir, problem_file, None)
-        self._write_bytes(main_dir, problem_file, None)
+        for filename in [TOOL_CONFIGS["problem_file"], REWARD_RESULT_FILE]:
+            rel = Path(filename)
+            self._write_bytes(rollout_dir, rel, None)
+            self._write_bytes(rollout_base_dir, rel, None)
+            self._write_bytes(main_dir, rel, None)
 
     @contextmanager
     def _main_workspace_lock(self):
@@ -309,7 +309,7 @@ class ToolRegistry:
         main_dir = self.base_workdir / "main"
 
         with self._main_workspace_lock():
-            self.remove_problem_file(rollout_key)
+            self.remove_ephemeral_files(rollout_key)
             reward_value = float(reward)
             if reward_value <= 0:
                 self._reset_rollout_dir(rollout_dir)
