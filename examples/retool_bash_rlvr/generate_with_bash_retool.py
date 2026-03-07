@@ -18,7 +18,7 @@ except ImportError as e:
 
 from bash_tool_sandbox import TOOL_CONFIGS, tool_registry
 
-REWARD_RESULT_FILE = "reward_result.txt"
+REWARD_RESULT_FILE = "answer.md"
 PROBLEM_FILE = TOOL_CONFIGS["problem_file"]
 
 TOOL_TEMPLATE = """<|im_start|>system
@@ -64,12 +64,13 @@ def format_conversation_with_tools(prompt: str, tools: list[dict[str, Any]] = No
         {
             "role": "system",
             "content": (
-                "You are a helpful assistant working in a bash environment. "
-                f"At the start of each rollout, the task is written to `{PROBLEM_FILE}` in the current working directory. "
-                "Read that file to understand the problem statement. Use the bash tool for computations, file inspection, "
-                "and shell-based reasoning when useful. Write your final computed answer to "
-                f"`{REWARD_RESULT_FILE}` in the working directory before finishing. "
-                "Return final answers using Answer: \\boxed{...}."
+                "You are working in an environment. "
+                "Read the files in the current directory to understand what needs to be done. "
+                "Use bash for any computation or inspection you need. "
+                f"Write your final answer to `{REWARD_RESULT_FILE}` using the format: Answer: \\boxed{{...}} "
+                "You may create, modify, and organize files in this workspace. "
+                "Useful scripts, utilities, or notes you leave behind persist across tasks. "
+                "Structure the workspace however helps you work best."
             ),
         },
         {"role": "user", "content": prompt},

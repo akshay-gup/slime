@@ -22,7 +22,7 @@ TOOL_CONFIGS = {
     "workdir": os.environ.get("SLIME_BASH_TOOL_WORKDIR", DEFAULT_WORKDIR),
     "num_rollout_envs": 8,
     "shared_workspace_across_prompts": True,
-    "problem_file": "problem.txt",
+    "problem_file": "task.md",
     "blocked_patterns": [
         "rm -rf /",
         ":(){ :|:&};:",
