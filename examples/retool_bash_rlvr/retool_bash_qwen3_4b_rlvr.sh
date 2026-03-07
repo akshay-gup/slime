@@ -40,6 +40,7 @@ SAVE_DIR="${SAVE_DIR:-${REPO_ROOT}/outputs/qwen3-4b-bash-rlvr}"
 OPEN_R1_LEVEL5_DIR="${OPEN_R1_LEVEL5_DIR:-${REPO_ROOT}/data/open-r1/level_5}"
 PROMPT_DATA="${PROMPT_DATA:-}"
 EVAL_PROMPT_DATA="${EVAL_PROMPT_DATA:-${REPO_ROOT}/data/aime-2024/aime-2024.jsonl}"
+EVAL_LABEL_KEY="${EVAL_LABEL_KEY:-answer}"
 WANDB_PROJECT="${WANDB_PROJECT:-slime-open-r1}"
 WANDB_GROUP="${WANDB_GROUP:-qwen3-4B-bash-rlvr}"
 SLIME_BASH_TOOL_WORKDIR="${SLIME_BASH_TOOL_WORKDIR:-/opt/NeMo/slime_bash_tool_workspace}"
@@ -79,6 +80,7 @@ ROLLOUT_ARGS=(
 EVAL_ARGS=(
    --eval-interval 20
    --eval-prompt-data aime "${EVAL_PROMPT_DATA}"
+   --eval-label-key "${EVAL_LABEL_KEY}"
    --n-samples-per-eval-prompt 16
    --eval-max-response-len 16384
    --eval-top-p 1
