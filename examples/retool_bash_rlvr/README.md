@@ -54,9 +54,9 @@ By default (`shared_workspace_across_prompts=True`), all prompts share one bash 
 
 
 - every sample starts by refreshing its rollout copy from the latest `workdir/main`
-- one shared rollout slot is used for all prompts
+- samples are sharded across rollout slots (`SLIME_BASH_NUM_ROLLOUT_ENVS`, default `8`) so multiple GPUs can execute tool rollouts concurrently
 - split/merge logic still happens per sample (branch, score, merge-or-discard)
 
-Set `shared_workspace_across_prompts=False` to hash prompts into multiple rollout slots using the rollout key.
+By default, `retool_bash_qwen3_4b_rlvr.sh` sets `SLIME_BASH_NUM_ROLLOUT_ENVS=${NUM_GPUS}` so one rollout slot is available per GPU.
 
 This behavior is implemented in `bash_tool_sandbox.py` via `ToolRegistry.prepare_rollout()` and `ToolRegistry.finalize_rollout()`, called from `generate()` and `reward_func()`.
