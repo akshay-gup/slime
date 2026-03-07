@@ -3,6 +3,9 @@ import re
 from pathlib import Path
 from typing import Any
 
+from latex2sympy2_extended import NormalizationConfig
+from math_verify import LatexExtractionConfig, parse, verify
+
 try:
     from jinja2 import Template
 except ImportError as e:
@@ -12,17 +15,59 @@ from slime.rollout.sglang_rollout import GenerateState
 from slime.utils.http_utils import post
 from slime.utils.types import Sample
 
-try:
-    from slime.rollout.rm_hub.math_dapo_utils import compute_score as math_dapo_compute_score
-except ImportError as e:
-    raise ImportError("MathDapo is not installed") from e
-
 from bash_tool_sandbox import TOOL_CONFIGS, create_tracer, tool_registry
 
 logger = logging.getLogger(__name__)
 
 REWARD_RESULT_FILE = "answer.md"
 PROBLEM_FILE = TOOL_CONFIGS["problem_file"]
+
+
+def _parse_model_answer(text: str):
+    """Parse a model answer using boxed-math extraction rules."""
+    return parse(
+        text,
+        extraction_config=[
+            LatexExtractionConfig(
+                normalization_config=NormalizationConfig(
+                    nits=False,
+                    malformed_operators=False,
+                    basic_latex=True,
+                    boxed="all",
+                    units=True,
+                ),
+                boxed_match_priority=0,
+                try_extract_without_anchor=False,
+            )
+        ],
+        extraction_mode="first_match",
+        parsing_timeout=None,
+    )
+
+
+def _compute_bigmath_score(solution_str: str, ground_truth: str) -> dict[str, Any]:
+    """Compute 0/1 reward with BigMath verifier-compatible parsing."""
+    if not ground_truth:
+        return {"score": 0.0, "pred": None}
+
+    gold_parsed = parse(ground_truth, extraction_mode="first_match", parsing_timeout=None)
+    if not gold_parsed:
+        return {"score": 0.0, "pred": None}
+
+    answer_parsed = _parse_model_answer(solution_str)
+    if not answer_parsed:
+        return {"score": 0.0, "pred": None}
+
+    try:
+        reward = float(verify(gold_parsed, answer_parsed, timeout_seconds=None))
+    except Exception:
+        logger.exception("BigMath verify failed")
+        reward = 0.0
+
+    return {
+        "score": 1.0 if reward > 0.0 else 0.0,
+        "pred": str(answer_parsed),
+    }
 
 
 def _extract_prompt_text(prompt: str | list[dict[str, str]]) -> str:
@@ -322,7 +367,7 @@ async def reward_func(args, sample, **kwargs):
             solution_str = ""
 
         ground_truth = sample.label if sample.label is not None else ""
-        result = math_dapo_compute_score(solution_str, ground_truth, strict_box_verify=True)
+        result = _compute_bigmath_score(solution_str, ground_truth)
         if result["pred"] is None:
             result["pred"] = ""
 
