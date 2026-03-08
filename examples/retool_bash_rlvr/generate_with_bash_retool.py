@@ -123,6 +123,7 @@ def format_conversation_with_tools(prompt: str, tools: list[dict[str, Any]] = No
                 "Read the files in the current directory to understand what needs to be done. "
                 "Use bash for any computation or inspection you need. "
                 f"Write your final answer to `{REWARD_RESULT_FILE}` using the format: Answer: \\boxed{{...}} "
+                "Your working memory is limited and resets frequently, but files in workspace persist. "
                 "You may create, modify, and organize files in this workspace. "
                 "Useful scripts, utilities, or notes you leave behind persist across tasks. "
                 "Structure the workspace however helps you work best."
