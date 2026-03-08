@@ -15,6 +15,7 @@
 
 import copy
 import heapq
+import warnings
 
 
 def karmarkar_karp(seqlen_list: list[int], k_partitions: int, equal_size: bool):
@@ -173,7 +174,16 @@ def get_seqlen_balanced_partitions(seqlen_list: list[int], k_partitions: int, eq
         assert seen_idx == set(range(len(seqlen_list)))
         return sorted_partitions
 
-    partitions = karmarkar_karp(seqlen_list=seqlen_list, k_partitions=k_partitions, equal_size=equal_size)
+    effective_equal_size = equal_size
+    if equal_size and len(seqlen_list) % k_partitions != 0:
+        warnings.warn(
+            "Falling back to variable-size partitions because the number of items is not divisible by "
+            f"k_partitions ({len(seqlen_list)} % {k_partitions} != 0).",
+            stacklevel=2,
+        )
+        effective_equal_size = False
+
+    partitions = karmarkar_karp(seqlen_list=seqlen_list, k_partitions=k_partitions, equal_size=effective_equal_size)
     return _check_and_sort_partitions(partitions)
 
 
