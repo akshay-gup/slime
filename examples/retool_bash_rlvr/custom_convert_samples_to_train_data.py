@@ -51,6 +51,41 @@ def _trim_to_dp_multiple(expanded: dict, dp_size: int) -> None:
     )
 
 
+def _trim_to_global_batch_multiple(expanded: dict, global_batch_size: int) -> None:
+    """Keep rollout size compatible with train-side fixed global_batch_size handling.
+
+    Today the rollout -> train split path only forwards a dynamic global batch size
+    from the built-in rollout conversion flow. Custom converters run out-of-tree, so
+    we proactively trim to a multiple of the configured global_batch_size to avoid
+    partial final steps that can trigger micro-batch index assertions in Megatron.
+    """
+    if global_batch_size <= 0:
+        return
+
+    num_items = len(expanded["tokens"])
+    remainder = num_items % global_batch_size
+    if remainder == 0:
+        return
+
+    trim_len = num_items - remainder
+    if trim_len <= 0:
+        raise ValueError(
+            "Expanded rollout has fewer items than global_batch_size and cannot form a train step: "
+            f"num_items={num_items}, global_batch_size={global_batch_size}."
+        )
+
+    for key, value in list(expanded.items()):
+        if isinstance(value, list) and len(value) == num_items:
+            expanded[key] = value[:trim_len]
+
+    logger.warning(
+        "Trimmed expanded train items from %d to %d to satisfy global_batch_size=%d divisibility",
+        num_items,
+        trim_len,
+        global_batch_size,
+    )
+
+
 def _infer_dynamic_global_batch_size(args, num_items: int, dp_size: int) -> int | None:
     """Pick a safe global batch size that always maps to >=1 local rollout step."""
     if num_items <= 0:
@@ -226,6 +261,9 @@ def convert_samples_to_train_data(args, samples: list[Sample] | list[list[Sample
 
     dp_size = _infer_data_parallel_size(args)
     _trim_to_dp_multiple(expanded, dp_size)
+
+    configured_gbs = int(getattr(args, "global_batch_size", 0) or 0)
+    _trim_to_global_batch_multiple(expanded, configured_gbs)
 
     dynamic_global_batch_size = _infer_dynamic_global_batch_size(args, len(expanded["tokens"]), dp_size)
     if dynamic_global_batch_size is not None:
