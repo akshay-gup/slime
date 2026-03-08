@@ -57,7 +57,12 @@ By default (`shared_workspace_across_prompts=True`), all prompts share one bash 
 - samples are sharded across rollout slots (`SLIME_BASH_NUM_ROLLOUT_ENVS`, default `8`) so multiple GPUs can execute tool rollouts concurrently
 - split/merge logic still happens per sample (branch, score, merge-or-discard)
 
-By default, `retool_bash_qwen3_4b_rlvr.sh` sets `SLIME_BASH_NUM_ROLLOUT_ENVS=${NUM_GPUS}` so one rollout slot is available per GPU.
+`retool_bash_qwen3_4b_rlvr.sh` is tuned for a single-node 4xH100 setup with a 4B model:
+
+- fixed `NUM_GPUS=4` (no auto detection)
+- `--rollout-num-gpus-per-engine 1` to run one rollout engine per GPU
+- `SLIME_BASH_NUM_ROLLOUT_ENVS=4` so one bash workspace slot is available per GPU
+- higher throughput defaults (`--tensor-model-parallel-size 1`, `--max-tokens-per-gpu 5120`, `--sglang-mem-fraction-static 0.8`)
 
 The script also sets `--eval-label-key` via `EVAL_LABEL_KEY` (default: `label`) to match the AIME eval JSON schema.
 

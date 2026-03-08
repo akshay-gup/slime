@@ -3,23 +3,20 @@ set -ex
 
 export PYTHONBUFFERED=16
 
+# Fixed config for a single node with 4x H100 and a 4B model.
+# Keep these explicit to avoid environment-dependent auto-detection behavior.
+NUM_GPUS=4
+ACTOR_NUM_NODES="${ACTOR_NUM_NODES:-1}"
+ACTOR_NUM_GPUS_PER_NODE="${ACTOR_NUM_GPUS_PER_NODE:-4}"
+ROLLOUT_NUM_GPUS_PER_ENGINE="${ROLLOUT_NUM_GPUS_PER_ENGINE:-1}"
+RAY_DASHBOARD_PORT="${RAY_DASHBOARD_PORT:-8265}"
+SGLANG_MEM_FRACTION_STATIC="${SGLANG_MEM_FRACTION_STATIC:-0.8}"
+
 if command -v nvidia-smi >/dev/null 2>&1; then
-   DETECTED_NUM_GPUS="$(nvidia-smi --list-gpus 2>/dev/null | wc -l)"
    NVLINK_COUNT="$(nvidia-smi topo -m 2>/dev/null | grep -o 'NV[0-9][0-9]*' | wc -l)"
 else
-   DETECTED_NUM_GPUS=0
    NVLINK_COUNT=0
 fi
-
-NUM_GPUS="${NUM_GPUS:-${DETECTED_NUM_GPUS}}"
-if [ "${NUM_GPUS}" -le 0 ]; then
-   NUM_GPUS=1
-fi
-ACTOR_NUM_NODES="${ACTOR_NUM_NODES:-1}"
-ACTOR_NUM_GPUS_PER_NODE="${ACTOR_NUM_GPUS_PER_NODE:-${NUM_GPUS}}"
-ROLLOUT_NUM_GPUS_PER_ENGINE="${ROLLOUT_NUM_GPUS_PER_ENGINE:-}"
-RAY_DASHBOARD_PORT="${RAY_DASHBOARD_PORT:-8265}"
-SGLANG_MEM_FRACTION_STATIC="${SGLANG_MEM_FRACTION_STATIC:-0.7}"
 
 if [ "${NVLINK_COUNT}" -gt 0 ]; then
    HAS_NVLINK=1
@@ -44,7 +41,7 @@ EVAL_LABEL_KEY="${EVAL_LABEL_KEY:-label}"
 WANDB_PROJECT="${WANDB_PROJECT:-slime-open-r1}"
 WANDB_GROUP="${WANDB_GROUP:-qwen3-4B-bash-rlvr}"
 SLIME_BASH_TOOL_WORKDIR="${SLIME_BASH_TOOL_WORKDIR:-/opt/NeMo/slime_bash_tool_workspace}"
-SLIME_BASH_NUM_ROLLOUT_ENVS="${SLIME_BASH_NUM_ROLLOUT_ENVS:-${NUM_GPUS}}"
+SLIME_BASH_NUM_ROLLOUT_ENVS="${SLIME_BASH_NUM_ROLLOUT_ENVS:-4}"
 
 if [ -z "${PROMPT_DATA}" ]; then
    PROMPT_DATA="$(find "${OPEN_R1_LEVEL5_DIR}" -maxdepth 1 -type f -name '*.parquet' | sort | head -n 1)"
@@ -87,8 +84,7 @@ EVAL_ARGS=(
 )
 
 PERF_ARGS=(
-   --tensor-model-parallel-size 2
-   --sequence-parallel
+   --tensor-model-parallel-size 1
    --pipeline-model-parallel-size 1
    --context-parallel-size 1
    --expert-model-parallel-size 1
@@ -97,7 +93,7 @@ PERF_ARGS=(
    --recompute-method uniform
    --recompute-num-layers 1
    --use-dynamic-batch-size
-   --max-tokens-per-gpu 9216
+   --max-tokens-per-gpu 5120
 )
 
 GRPO_ARGS=(
@@ -135,10 +131,9 @@ CUSTOM_ARGS=(
    --custom-convert-samples-to-train-data-path custom_convert_samples_to_train_data.convert_samples_to_train_data
 )
 
-SGLANG_ARGS=()
-if [ -n "${ROLLOUT_NUM_GPUS_PER_ENGINE}" ]; then
-   SGLANG_ARGS+=(--rollout-num-gpus-per-engine "${ROLLOUT_NUM_GPUS_PER_ENGINE}")
-fi
+SGLANG_ARGS=(
+   --rollout-num-gpus-per-engine "${ROLLOUT_NUM_GPUS_PER_ENGINE}"
+)
 SGLANG_ARGS+=(--sglang-mem-fraction-static "${SGLANG_MEM_FRACTION_STATIC}")
 
 MISC_ARGS=(
