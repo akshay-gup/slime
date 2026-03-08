@@ -60,9 +60,14 @@ By default (`shared_workspace_across_prompts=True`), all prompts share one bash 
 `retool_bash_qwen3_4b_rlvr.sh` is tuned for a single-node 4xH100 setup with a 4B model:
 
 - fixed `NUM_GPUS=4` (no auto detection)
+- fixed `NUM_GPUS_PER_NODE=4` and passes `--num-gpus-per-node 4` explicitly under `--colocate`
 - `--rollout-num-gpus-per-engine 1` to run one rollout engine per GPU
 - `SLIME_BASH_NUM_ROLLOUT_ENVS=4` so one bash workspace slot is available per GPU
 - higher throughput defaults (`--tensor-model-parallel-size 1`, `--max-tokens-per-gpu 5120`, `--sglang-mem-fraction-static 0.8`)
+
+The launcher now fails fast if conflicting environment overrides are present (for example,
+`ACTOR_NUM_GPUS_PER_NODE!=4`, `NUM_GPUS_PER_NODE!=4`, or `ROLLOUT_NUM_GPUS_PER_ENGINE!=1`) so
+4-GPU behavior stays explicit.
 
 The script also sets `--eval-label-key` via `EVAL_LABEL_KEY` (default: `label`) to match the AIME eval JSON schema.
 
