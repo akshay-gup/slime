@@ -62,7 +62,7 @@ EVAL_LABEL_KEY="${EVAL_LABEL_KEY:-label}"
 WANDB_PROJECT="${WANDB_PROJECT:-slime-open-r1}"
 WANDB_GROUP="${WANDB_GROUP:-qwen3-4B-bash-rlvr}"
 SLIME_BASH_TOOL_WORKDIR="${SLIME_BASH_TOOL_WORKDIR:-/opt/NeMo/slime_bash_tool_workspace}"
-SLIME_BASH_NUM_ROLLOUT_ENVS="${SLIME_BASH_NUM_ROLLOUT_ENVS:-4}"
+SLIME_BASH_NUM_ROLLOUT_ENVS="${SLIME_BASH_NUM_ROLLOUT_ENVS:-32}"
 
 if [ -z "${PROMPT_DATA}" ]; then
    PROMPT_DATA="$(find "${OPEN_R1_LEVEL5_DIR}" -maxdepth 1 -type f -name '*.parquet' | sort | head -n 1)"
