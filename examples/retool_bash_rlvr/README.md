@@ -48,9 +48,9 @@ Each rollout runs in an isolated copy of `workdir/main`. After reward is compute
 
 By default (`shared_workspace_across_prompts=True`), all prompts share one bash workspace lineage:
 
-- at rollout start, the current sample problem is written to `README.md` inside the rollout workspace
-- system prompt only gives general environment instructions; the model reads `README.md` via bash commands
-- before merge/discard in reward finalization, `README.md` is removed from rollout/base/main workspaces
+- at rollout start, the current sample problem is written to `task.md` inside the rollout workspace
+- system prompt only gives general environment instructions; the model reads `task.md` via bash commands
+- before merge/discard in reward finalization, `task.md` is removed from rollout/base/main workspaces
 
 
 - every sample starts by refreshing its rollout copy from the latest `workdir/main`

@@ -30,7 +30,7 @@ TOOL_CONFIGS = {
     "num_rollout_envs": int(os.environ.get("SLIME_BASH_NUM_ROLLOUT_ENVS", "8")),
     "shared_workspace_across_prompts": os.environ.get("SLIME_BASH_SHARED_WORKSPACE_ACROSS_PROMPTS", "true").lower()
     in ("1", "true", "yes", "on"),
-    "problem_file": "README.md",
+    "problem_file": "task.md",
     "trace_dir": os.environ.get("SLIME_BASH_TRACE_DIR", DEFAULT_TRACE_DIR),
     "blocked_patterns": [
         "rm -rf /",
