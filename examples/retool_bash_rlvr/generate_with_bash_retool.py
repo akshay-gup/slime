@@ -21,6 +21,14 @@ logger = logging.getLogger(__name__)
 
 REWARD_RESULT_FILE = "answer.md"
 PROBLEM_FILE = TOOL_CONFIGS["problem_file"]
+TASK_FILE_INSTRUCTIONS = (
+    "Use bash for any computation or inspection you need.\n"
+    f"Write your final answer to `{REWARD_RESULT_FILE}` using the format: Answer: \\boxed{{...}}\n"
+    "Your working memory is limited and resets frequently, but files in workspace persist.\n"
+    "You may create, modify, and organize files in this workspace.\n"
+    "Useful scripts, utilities, or notes you leave behind persist across tasks.\n"
+    "Structure the workspace however helps you work best."
+)
 
 
 def _parse_model_answer(text: str):
@@ -119,14 +127,8 @@ def format_conversation_with_tools(prompt: str, tools: list[dict[str, Any]] = No
         {
             "role": "system",
             "content": (
-                "You are working in an environment. "
-                "Read the files in the current directory to understand what needs to be done. "
-                "Use bash for any computation or inspection you need. "
-                f"Write your final answer to `{REWARD_RESULT_FILE}` using the format: Answer: \\boxed{{...}} "
-                "Your working memory is limited and resets frequently, but files in workspace persist. "
-                "You may create, modify, and organize files in this workspace. "
-                "Useful scripts, utilities, or notes you leave behind persist across tasks. "
-                "Structure the workspace however helps you work best."
+                "You are working in an environment with a bash tool. "
+                f"Start by reading {PROBLEM_FILE} in the current directory."
             ),
         },
         {"role": "user", "content": prompt},
@@ -187,7 +189,7 @@ async def execute_predictions(prediction: str, rollout_key: str | int | None, tr
         rollout_dir = tool_registry._resolve_rollout_workdir(rollout_key)
         if (Path(rollout_dir) / REWARD_RESULT_FILE).is_file():
             return "", True
-        return (f"\nUse bash to write your answer to `{REWARD_RESULT_FILE}`.\n", False)
+        return (f"\nRead {PROBLEM_FILE} in the current directory for full instructions.\n", False)
 
     logger.info("[rollout=%s] Invalid tool call (action=%s)", rollout_key, action)
     if tracer:
@@ -240,7 +242,8 @@ async def generate(args, sample: Sample, sampling_params) -> Sample:
 
     async with rollout_lock:
         tool_registry.prepare_rollout(rollout_key)
-        tool_registry.write_problem_file(rollout_key=rollout_key, problem_text=prompt_text)
+        task_text = f"{prompt_text.rstrip()}\n\n# Instructions\n{TASK_FILE_INSTRUCTIONS}"
+        tool_registry.write_problem_file(rollout_key=rollout_key, problem_text=task_text)
         prompt = format_conversation_with_tools(prompt="Please work on the task in the environment.", tools=tool_specs)
 
         prompt_tokens_ids = state.tokenizer(prompt, add_special_tokens=False)["input_ids"]
