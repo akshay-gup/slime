@@ -57,19 +57,20 @@ def _infer_dynamic_global_batch_size(args, num_items: int, dp_size: int) -> int 
         return None
 
     configured_gbs = max(1, int(getattr(args, "global_batch_size", num_items) or num_items))
-    # Keep within available item count to avoid zero-step rollout slices.
-    safe_gbs = min(configured_gbs, num_items)
 
-    # Keep DP divisibility so each rank gets an equal local batch size.
-    remainder = safe_gbs % dp_size
-    if remainder != 0:
-        safe_gbs -= remainder
+    # Search from the configured size downward for the largest batch size that:
+    #   1. Fits in this rollout.
+    #   2. Is DP divisible.
+    #   3. Exactly partitions the rollout (no leftover samples per step).
+    candidate = min(configured_gbs, num_items)
+    while candidate > 0:
+        if candidate % dp_size == 0 and num_items % candidate == 0:
+            return candidate
+        candidate -= 1
 
-    if safe_gbs <= 0:
-        # num_items is already DP divisible after trimming, so this fallback is safe.
-        safe_gbs = num_items
-
-    return safe_gbs
+    # num_items is already DP divisible after trimming, so this fallback is safe
+    # and always yields at least one complete rollout step.
+    return num_items
 
 
 def _flatten_samples(samples: list[Sample] | list[list[Sample]]) -> list[Sample]:
