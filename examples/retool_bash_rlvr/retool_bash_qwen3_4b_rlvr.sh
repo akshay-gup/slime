@@ -8,6 +8,7 @@ export PYTHONBUFFERED=16
 NUM_GPUS=4
 ACTOR_NUM_NODES="${ACTOR_NUM_NODES:-1}"
 ACTOR_NUM_GPUS_PER_NODE="${ACTOR_NUM_GPUS_PER_NODE:-4}"
+NUM_GPUS_PER_NODE="${NUM_GPUS_PER_NODE:-4}"
 ROLLOUT_NUM_GPUS_PER_ENGINE="${ROLLOUT_NUM_GPUS_PER_ENGINE:-1}"
 RAY_DASHBOARD_PORT="${RAY_DASHBOARD_PORT:-8265}"
 SGLANG_MEM_FRACTION_STATIC="${SGLANG_MEM_FRACTION_STATIC:-0.8}"
@@ -25,6 +26,26 @@ else
 fi
 
 MASTER_ADDR="${MASTER_ADDR:-127.0.0.1}"
+
+if [ "${ACTOR_NUM_NODES}" -ne 1 ]; then
+   echo "ERROR: This script is tuned for a single node; got ACTOR_NUM_NODES=${ACTOR_NUM_NODES}" >&2
+   exit 1
+fi
+
+if [ "${ACTOR_NUM_GPUS_PER_NODE}" -ne 4 ]; then
+   echo "ERROR: This script expects ACTOR_NUM_GPUS_PER_NODE=4; got ${ACTOR_NUM_GPUS_PER_NODE}" >&2
+   exit 1
+fi
+
+if [ "${NUM_GPUS_PER_NODE}" -ne 4 ]; then
+   echo "ERROR: This script expects NUM_GPUS_PER_NODE=4; got ${NUM_GPUS_PER_NODE}" >&2
+   exit 1
+fi
+
+if [ "${ROLLOUT_NUM_GPUS_PER_ENGINE}" -ne 1 ]; then
+   echo "ERROR: This script expects ROLLOUT_NUM_GPUS_PER_ENGINE=1; got ${ROLLOUT_NUM_GPUS_PER_ENGINE}" >&2
+   exit 1
+fi
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" &>/dev/null && pwd)"
 REPO_ROOT="$(cd -- "${SCRIPT_DIR}/../.." &>/dev/null && pwd)"
@@ -161,6 +182,7 @@ ray job submit --address="http://127.0.0.1:${RAY_DASHBOARD_PORT}" \
    -- python3 "${REPO_ROOT}/train.py" \
    --actor-num-nodes "${ACTOR_NUM_NODES}" \
    --actor-num-gpus-per-node "${ACTOR_NUM_GPUS_PER_NODE}" \
+   --num-gpus-per-node "${NUM_GPUS_PER_NODE}" \
    --colocate \
    ${MODEL_ARGS[@]} \
    ${CKPT_ARGS[@]} \
