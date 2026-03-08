@@ -51,40 +51,63 @@ def _trim_to_dp_multiple(expanded: dict, dp_size: int) -> None:
     )
 
 
-def _infer_dynamic_global_batch_size(args, num_items: int, dp_size: int) -> int | None:
+def _infer_dynamic_global_batch_size(
+    args,
+    num_items: int,
+    dp_size: int,
+    group_item_counts: list[int] | None = None,
+) -> int | None:
     """Pick a safe global batch size that always maps to >=1 local rollout step."""
     if num_items <= 0:
         return None
 
     configured_gbs = max(1, int(getattr(args, "global_batch_size", num_items) or num_items))
-    # Keep within available item count to avoid zero-step rollout slices.
-    safe_gbs = min(configured_gbs, num_items)
 
-    # Keep DP divisibility so each rank gets an equal local batch size.
-    remainder = safe_gbs % dp_size
-    if remainder != 0:
-        safe_gbs -= remainder
+    # If converted samples are grouped per source shard/rank, enforce a local-batch
+    # size that divides every non-empty group. This avoids per-rank leftover samples
+    # in get_data_iterator when expansion differs across groups.
+    non_empty_group_counts = [count for count in (group_item_counts or []) if count > 0]
+    if non_empty_group_counts:
+        configured_local_gbs = max(1, configured_gbs // dp_size)
+        max_local_gbs = min(configured_local_gbs, min(non_empty_group_counts))
 
-    if safe_gbs <= 0:
-        # num_items is already DP divisible after trimming, so this fallback is safe.
-        safe_gbs = num_items
+        for local_gbs in range(max_local_gbs, 0, -1):
+            if all(count % local_gbs == 0 for count in non_empty_group_counts):
+                return local_gbs * dp_size
 
-    return safe_gbs
+        return dp_size
+
+    # Fallback when group counts are unavailable: enforce exact global partitioning.
+    candidate = min(configured_gbs, num_items)
+    while candidate > 0:
+        if candidate % dp_size == 0 and num_items % candidate == 0:
+            return candidate
+        candidate -= 1
+
+    # num_items is already DP divisible after trimming, so this fallback is safe
+    # and always yields at least one complete rollout step.
+    return num_items
 
 
-def _flatten_samples(samples: list[Sample] | list[list[Sample]]) -> list[Sample]:
+def _flatten_samples_with_group_ids(samples: list[Sample] | list[list[Sample]]) -> tuple[list[Sample], list[int], int]:
     if not samples:
-        return []
+        return [], [], 0
+
     if isinstance(samples[0], Sample):
-        return samples  # type: ignore[return-value]
+        flat_samples = samples  # type: ignore[assignment]
+        return flat_samples, [0] * len(flat_samples), 1
 
     flat_samples: list[Sample] = []
-    for group in samples:  # type: ignore[assignment]
+    sample_group_ids: list[int] = []
+    for group_idx, group in enumerate(samples):  # type: ignore[assignment]
         if isinstance(group, Iterable):
-            flat_samples.extend(group)
+            for sample in group:
+                flat_samples.append(sample)
+                sample_group_ids.append(group_idx)
         else:
             raise TypeError(f"Expected list[Sample] entries, but got: {type(group)}")
-    return flat_samples
+
+    return flat_samples, sample_group_ids, len(samples)
 
 
 def _split_lengths(sample: Sample) -> list[int]:
@@ -110,7 +133,7 @@ def convert_samples_to_train_data(args, samples: list[Sample] | list[list[Sample
     This function is designed for trajectories produced by `generate_with_bash_retool.py`, where
     `sample.context_reset_token_segments` stores response chunks that were dropped from model context.
     """
-    flat_samples = _flatten_samples(samples)
+    flat_samples, sample_group_ids, num_sample_groups = _flatten_samples_with_group_ids(samples)
     if not flat_samples:
         return {
             "tokens": [],
@@ -130,6 +153,7 @@ def convert_samples_to_train_data(args, samples: list[Sample] | list[list[Sample
         "truncated": [],
         "sample_indices": [],
         "loss_masks": [],
+        "_group_ids": [],
     }
 
     optional_fields = {
@@ -141,7 +165,7 @@ def convert_samples_to_train_data(args, samples: list[Sample] | list[list[Sample
         "teacher_log_probs": [],
     }
 
-    for sample in flat_samples:
+    for sample, sample_group_id in zip(flat_samples, sample_group_ids, strict=True):
         split_lengths = _split_lengths(sample)
         if not split_lengths:
             continue
@@ -186,6 +210,7 @@ def convert_samples_to_train_data(args, samples: list[Sample] | list[list[Sample
             )
             expanded["sample_indices"].append(sample.index)
             expanded["loss_masks"].append(piece_loss_mask)
+            expanded["_group_ids"].append(sample_group_id)
 
             if sample.metadata and "round_number" in sample.metadata:
                 optional_fields["round_number"].append(sample.metadata["round_number"])
@@ -226,7 +251,18 @@ def convert_samples_to_train_data(args, samples: list[Sample] | list[list[Sample
     dp_size = _infer_data_parallel_size(args)
     _trim_to_dp_multiple(expanded, dp_size)
 
-    dynamic_global_batch_size = _infer_dynamic_global_batch_size(args, len(expanded["tokens"]), dp_size)
+    group_item_counts = None
+    if num_sample_groups > 1:
+        group_item_counts = [0] * num_sample_groups
+        for group_id in expanded["_group_ids"]:
+            group_item_counts[group_id] += 1
+
+    dynamic_global_batch_size = _infer_dynamic_global_batch_size(
+        args,
+        len(expanded["tokens"]),
+        dp_size,
+        group_item_counts,
+    )
     if dynamic_global_batch_size is not None:
         expanded["dynamic_global_batch_size"] = dynamic_global_batch_size
         if dynamic_global_batch_size != getattr(args, "global_batch_size", dynamic_global_batch_size):
@@ -236,6 +272,8 @@ def convert_samples_to_train_data(args, samples: list[Sample] | list[list[Sample
                 dynamic_global_batch_size,
                 len(expanded["tokens"]),
             )
+
+    expanded.pop("_group_ids", None)
 
     logger.info("Sample expansion: %d samples -> %d train items", len(flat_samples), len(expanded["tokens"]))
     return expanded
