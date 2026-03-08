@@ -12,6 +12,9 @@ NUM_GPUS_PER_NODE="${NUM_GPUS_PER_NODE:-4}"
 ROLLOUT_NUM_GPUS_PER_ENGINE="${ROLLOUT_NUM_GPUS_PER_ENGINE:-1}"
 RAY_DASHBOARD_PORT="${RAY_DASHBOARD_PORT:-8265}"
 SGLANG_MEM_FRACTION_STATIC="${SGLANG_MEM_FRACTION_STATIC:-0.8}"
+ROLLOUT_MAX_RESPONSE_LEN="${ROLLOUT_MAX_RESPONSE_LEN:-4096}"
+EVAL_MAX_RESPONSE_LEN="${EVAL_MAX_RESPONSE_LEN:-8192}"
+MAX_TOKENS_PER_GPU="${MAX_TOKENS_PER_GPU:-5120}"
 
 if command -v nvidia-smi >/dev/null 2>&1; then
    NVLINK_COUNT="$(nvidia-smi topo -m 2>/dev/null | grep -o 'NV[0-9][0-9]*' | wc -l)"
@@ -89,7 +92,7 @@ ROLLOUT_ARGS=(
    --num-rollout 3000
    --rollout-batch-size 32
    --n-samples-per-prompt 8
-   --rollout-max-response-len 8192
+   --rollout-max-response-len "${ROLLOUT_MAX_RESPONSE_LEN}"
    --rollout-temperature 1
    --global-batch-size 256
    --balance-data
@@ -100,7 +103,7 @@ EVAL_ARGS=(
    --eval-prompt-data aime "${EVAL_PROMPT_DATA}"
    --eval-label-key "${EVAL_LABEL_KEY}"
    --n-samples-per-eval-prompt 16
-   --eval-max-response-len 16384
+   --eval-max-response-len "${EVAL_MAX_RESPONSE_LEN}"
    --eval-top-p 1
 )
 
@@ -114,7 +117,7 @@ PERF_ARGS=(
    --recompute-method uniform
    --recompute-num-layers 1
    --use-dynamic-batch-size
-   --max-tokens-per-gpu 9216
+   --max-tokens-per-gpu "${MAX_TOKENS_PER_GPU}"
 )
 
 GRPO_ARGS=(

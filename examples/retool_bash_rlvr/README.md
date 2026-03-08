@@ -63,7 +63,8 @@ By default (`shared_workspace_across_prompts=True`), all prompts share one bash 
 - fixed `NUM_GPUS_PER_NODE=4` and passes `--num-gpus-per-node 4` explicitly under `--colocate`
 - `--rollout-num-gpus-per-engine 1` to run one rollout engine per GPU
 - `SLIME_BASH_NUM_ROLLOUT_ENVS=4` so one bash workspace slot is available per GPU
-- higher throughput defaults (`--tensor-model-parallel-size 1`, `--max-tokens-per-gpu 5120`, `--sglang-mem-fraction-static 0.8`)
+- memory-safer defaults for 4xH100 RLVR (`--max-tokens-per-gpu 5120`, `--rollout-max-response-len 4096`, `--eval-max-response-len 8192`, `--sglang-mem-fraction-static 0.8`)
+- all three limits can be overridden via env vars (`MAX_TOKENS_PER_GPU`, `ROLLOUT_MAX_RESPONSE_LEN`, `EVAL_MAX_RESPONSE_LEN`) when debugging throughput vs. stability
 
 The launcher now fails fast if conflicting environment overrides are present (for example,
 `ACTOR_NUM_GPUS_PER_NODE!=4`, `NUM_GPUS_PER_NODE!=4`, or `ROLLOUT_NUM_GPUS_PER_ENGINE!=1`) so
