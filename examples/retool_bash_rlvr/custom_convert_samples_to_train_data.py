@@ -51,6 +51,27 @@ def _trim_to_dp_multiple(expanded: dict, dp_size: int) -> None:
     )
 
 
+def _infer_dynamic_global_batch_size(args, num_items: int, dp_size: int) -> int | None:
+    """Pick a safe global batch size that always maps to >=1 local rollout step."""
+    if num_items <= 0:
+        return None
+
+    configured_gbs = max(1, int(getattr(args, "global_batch_size", num_items) or num_items))
+    # Keep within available item count to avoid zero-step rollout slices.
+    safe_gbs = min(configured_gbs, num_items)
+
+    # Keep DP divisibility so each rank gets an equal local batch size.
+    remainder = safe_gbs % dp_size
+    if remainder != 0:
+        safe_gbs -= remainder
+
+    if safe_gbs <= 0:
+        # num_items is already DP divisible after trimming, so this fallback is safe.
+        safe_gbs = num_items
+
+    return safe_gbs
+
+
 def _flatten_samples(samples: list[Sample] | list[list[Sample]]) -> list[Sample]:
     if not samples:
         return []
@@ -202,7 +223,19 @@ def convert_samples_to_train_data(args, samples: list[Sample] | list[list[Sample
         if values:
             expanded[key] = values
 
-    _trim_to_dp_multiple(expanded, _infer_data_parallel_size(args))
+    dp_size = _infer_data_parallel_size(args)
+    _trim_to_dp_multiple(expanded, dp_size)
+
+    dynamic_global_batch_size = _infer_dynamic_global_batch_size(args, len(expanded["tokens"]), dp_size)
+    if dynamic_global_batch_size is not None:
+        expanded["dynamic_global_batch_size"] = dynamic_global_batch_size
+        if dynamic_global_batch_size != getattr(args, "global_batch_size", dynamic_global_batch_size):
+            logger.warning(
+                "Adjusted dynamic_global_batch_size from %s to %d for rollout with %d converted items",
+                getattr(args, "global_batch_size", None),
+                dynamic_global_batch_size,
+                len(expanded["tokens"]),
+            )
 
     logger.info("Sample expansion: %d samples -> %d train items", len(flat_samples), len(expanded["tokens"]))
     return expanded
