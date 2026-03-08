@@ -324,7 +324,10 @@ def get_data_iterator(
     num_local_samples = len(rollout_data["total_lengths"])
     global_batch_size = rollout_data.get("dynamic_global_batch_size", args.global_batch_size)
     num_local_gbs = global_batch_size // dp_size
-    num_steps_per_rollout = num_local_samples // num_local_gbs
+    assert num_local_gbs > 0, f"Invalid local batch size: global_batch_size={global_batch_size}, dp_size={dp_size}"
+
+    step_ranges = [(start, min(start + num_local_gbs, num_local_samples)) for start in range(0, num_local_samples, num_local_gbs)]
+    num_steps_per_rollout = len(step_ranges)
 
     if global_batch_size != args.global_batch_size:
         logger.info(
@@ -347,11 +350,10 @@ def get_data_iterator(
         samples = rollout_data["total_lengths"]
         assert len(samples) == num_local_samples
         num_microbatches = []
-        for i in range(num_steps_per_rollout):
-            start, end = i * num_local_gbs, (i + 1) * num_local_gbs
-            num_microbatches.append(
-                get_minimum_num_micro_batch_size(samples[start:end], args.max_tokens_per_gpu * cp_size)
-            )
+        for start, end in step_ranges:
+            step_samples = samples[start:end]
+            num_mbs = get_minimum_num_micro_batch_size(step_samples, args.max_tokens_per_gpu * cp_size)
+            num_microbatches.append(min(num_mbs, len(step_samples)))
 
         num_microbatches = torch.tensor(num_microbatches, dtype=torch.int, device=torch.cuda.current_device())
         dist.all_reduce(num_microbatches, op=dist.ReduceOp.MAX, group=dp_group)
@@ -369,8 +371,7 @@ def get_data_iterator(
         samples = rollout_data["total_lengths"]
         # balance the number of mirobatches across steps
         micro_batch_indices = []
-        for i, num_mbs in enumerate(num_microbatches):
-            start, end = i * num_local_gbs, (i + 1) * num_local_gbs
+        for (start, end), num_mbs in zip(step_ranges, num_microbatches, strict=True):
             samples = rollout_data["total_lengths"][start:end]
             partitions = get_seqlen_balanced_partitions(samples, num_mbs, equal_size=False)
             for j in range(num_mbs):
