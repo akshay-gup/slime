@@ -8,6 +8,49 @@ from slime.utils.types import Sample
 logger = logging.getLogger(__name__)
 
 
+def _infer_data_parallel_size(args) -> int:
+    """Best-effort inference of DP size used by train-side partitioning."""
+    for attr in ("data_parallel_size", "dp_size", "train_dp_size"):
+        value = getattr(args, attr, None)
+        if isinstance(value, int) and value > 0:
+            return value
+
+    actor_num_nodes = max(1, int(getattr(args, "actor_num_nodes", 1) or 1))
+    actor_num_gpus_per_node = max(1, int(getattr(args, "actor_num_gpus_per_node", 1) or 1))
+    tensor_mp = max(1, int(getattr(args, "tensor_model_parallel_size", 1) or 1))
+    pipeline_mp = max(1, int(getattr(args, "pipeline_model_parallel_size", 1) or 1))
+    context_mp = max(1, int(getattr(args, "context_parallel_size", 1) or 1))
+    expert_mp = max(1, int(getattr(args, "expert_model_parallel_size", 1) or 1))
+
+    world_size = actor_num_nodes * actor_num_gpus_per_node
+    model_parallel = tensor_mp * pipeline_mp * context_mp * expert_mp
+    if world_size % model_parallel == 0:
+        return max(1, world_size // model_parallel)
+    return 1
+
+
+def _trim_to_dp_multiple(expanded: dict, dp_size: int) -> None:
+    if dp_size <= 1:
+        return
+
+    num_items = len(expanded["tokens"])
+    remainder = num_items % dp_size
+    if remainder == 0:
+        return
+
+    trim_len = num_items - remainder
+    for key, value in list(expanded.items()):
+        if isinstance(value, list) and len(value) == num_items:
+            expanded[key] = value[:trim_len]
+
+    logger.warning(
+        "Trimmed expanded train items from %d to %d to satisfy dp_size=%d divisibility",
+        num_items,
+        trim_len,
+        dp_size,
+    )
+
+
 def _flatten_samples(samples: list[Sample] | list[list[Sample]]) -> list[Sample]:
     if not samples:
         return []
@@ -158,6 +201,8 @@ def convert_samples_to_train_data(args, samples: list[Sample] | list[list[Sample
     for key, values in optional_fields.items():
         if values:
             expanded[key] = values
+
+    _trim_to_dp_multiple(expanded, _infer_data_parallel_size(args))
 
     logger.info("Sample expansion: %d samples -> %d train items", len(flat_samples), len(expanded["tokens"]))
     return expanded
