@@ -21,7 +21,7 @@ logger = logging.getLogger(__name__)
 
 REWARD_RESULT_FILE = "answer.md"
 PROBLEM_FILE = TOOL_CONFIGS["problem_file"]
-TASK_FILE_TEMPLATE = f"""# Instructions
+TASK_FILE_TEMPLATE = """# Instructions
 
 Your working memory resets frequently. Anything not written to a file
 will be lost. This is normal.
@@ -39,7 +39,7 @@ will be lost. This is normal.
 
 ## How to finish
 
-When you have your final answer, write it to `{REWARD_RESULT_FILE}` using
+When you have your final answer, write it to `{{reward_result_file}}` using
 the format: Answer: \\boxed{{your_answer}}
 
 ## Workspace
@@ -265,7 +265,10 @@ async def generate(args, sample: Sample, sampling_params) -> Sample:
 
     async with rollout_lock:
         tool_registry.prepare_rollout(rollout_key)
-        task_text = Template(TASK_FILE_TEMPLATE).render(problem_text=prompt_text.rstrip())
+        task_text = Template(TASK_FILE_TEMPLATE).render(
+            reward_result_file=REWARD_RESULT_FILE,
+            problem_text=prompt_text.rstrip(),
+        )
         tool_registry.write_problem_file(rollout_key=rollout_key, problem_text=task_text)
         prompt = format_conversation_with_tools(prompt="Please work on the task in the environment.", tools=tool_specs)
 
