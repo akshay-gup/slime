@@ -90,11 +90,11 @@ ROLLOUT_ARGS=(
    --label-key solution
    --reward-key score
    --num-rollout 3000
-   --rollout-batch-size 32
+   --rollout-batch-size 128
    --n-samples-per-prompt 8
    --rollout-max-response-len "${ROLLOUT_MAX_RESPONSE_LEN}"
    --rollout-temperature 1
-   --global-batch-size 256
+   --global-batch-size 1024
    --balance-data
 )
 
