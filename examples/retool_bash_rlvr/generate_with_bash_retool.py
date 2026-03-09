@@ -240,11 +240,32 @@ def _resolve_rollout_key(sample: Sample) -> str | int | None:
 
 
 def _archive_and_reset_context_tokens(
-    context_response_token_ids: list[int], archived_context_response_token_ids: list[list[int]]
+    context_response_token_ids: list[int],
+    archived_context_response_token_ids: list[list[int]],
+    max_segment_length: int | None = None,
 ) -> list[int]:
-    if context_response_token_ids:
+    if not context_response_token_ids:
+        return []
+
+    if max_segment_length is None or max_segment_length <= 0:
         archived_context_response_token_ids.append(context_response_token_ids.copy())
+        return []
+
+    start = 0
+    total = len(context_response_token_ids)
+    while start < total:
+        end = min(start + max_segment_length, total)
+        archived_context_response_token_ids.append(context_response_token_ids[start:end])
+        start = end
     return []
+
+
+def _infer_max_segment_length(args) -> int | None:
+    value = getattr(args, "rollout_max_response_len", None)
+    if isinstance(value, int) and value > 0:
+        return value
+    return None
+
 
 
 async def generate(args, sample: Sample, sampling_params) -> Sample:
@@ -283,6 +304,7 @@ async def generate(args, sample: Sample, sampling_params) -> Sample:
         archived_context_response_token_ids = []
         tool_call_count = 0
         saw_length_stop = False
+        max_segment_length = _infer_max_segment_length(args)
 
         for turn_num in range(TOOL_CONFIGS["max_turns"]):
             logger.info("[rollout=%s] Turn %d/%d, context_tokens=%d, tool_calls=%d", rollout_key, turn_num + 1, TOOL_CONFIGS["max_turns"], len(prompt_tokens_ids + context_response_token_ids), tool_call_count)
@@ -353,7 +375,29 @@ async def generate(args, sample: Sample, sampling_params) -> Sample:
                 if tracer:
                     tracer.log("context_reset", turn=turn_num + 1, archived_tokens=len(context_response_token_ids))
                 context_response_token_ids = _archive_and_reset_context_tokens(
-                    context_response_token_ids, archived_context_response_token_ids
+                    context_response_token_ids,
+                    archived_context_response_token_ids,
+                    max_segment_length=max_segment_length,
+                )
+
+            if max_segment_length is not None and len(context_response_token_ids) > max_segment_length:
+                logger.info(
+                    "[rollout=%s] Context length %d exceeded max segment length %d, archiving context",
+                    rollout_key,
+                    len(context_response_token_ids),
+                    max_segment_length,
+                )
+                if tracer:
+                    tracer.log(
+                        "context_reset_max_segment_length",
+                        turn=turn_num + 1,
+                        archived_tokens=len(context_response_token_ids),
+                        max_segment_length=max_segment_length,
+                    )
+                context_response_token_ids = _archive_and_reset_context_tokens(
+                    context_response_token_ids,
+                    archived_context_response_token_ids,
+                    max_segment_length=max_segment_length,
                 )
 
             if tool_call_count >= TOOL_CONFIGS["max_tool_calls"]:
