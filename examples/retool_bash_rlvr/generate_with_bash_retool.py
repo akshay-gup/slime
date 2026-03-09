@@ -21,14 +21,37 @@ logger = logging.getLogger(__name__)
 
 REWARD_RESULT_FILE = "answer.md"
 PROBLEM_FILE = TOOL_CONFIGS["problem_file"]
-TASK_FILE_INSTRUCTIONS = (
-    "Use bash for any computation or inspection you need.\n"
-    f"Write your final answer to `{REWARD_RESULT_FILE}` using the format: Answer: \\boxed{{...}}\n"
-    "Your working memory is limited and resets frequently, but files in workspace persist.\n"
-    "You may create, modify, and organize files in this workspace.\n"
-    "Useful scripts, utilities, or notes you leave behind persist across tasks.\n"
-    "Structure the workspace however helps you work best."
-)
+TASK_FILE_TEMPLATE = f"""# Instructions
+
+Your working memory resets frequently. Anything not written to a file
+will be lost. This is normal.
+
+## How to work
+
+1. Start every cycle by reading the workspace: `ls` to see what exists.
+2. If you see files from previous work, read them to understand where
+   you left off. Do not start over — continue from what's there.
+3. Do all your thinking and computation by writing files and running
+   them. Do not try to solve problems in your head.
+4. Before ending any cycle, make sure your progress is saved to a file.
+   Write what you've figured out, what's left to do, and any partial
+   results.
+
+## How to finish
+
+When you have your final answer, write it to `{REWARD_RESULT_FILE}` using
+the format: Answer: \\boxed{{your_answer}}
+
+## Workspace
+
+This workspace persists across tasks. Files you create now will be here
+for future tasks. If you build something useful — a script, a strategy,
+a template — it stays. Organize however helps you work better over time.
+
+# Problem
+
+{{problem_text}}
+"""
 
 
 def _parse_model_answer(text: str):
@@ -242,7 +265,7 @@ async def generate(args, sample: Sample, sampling_params) -> Sample:
 
     async with rollout_lock:
         tool_registry.prepare_rollout(rollout_key)
-        task_text = f"{prompt_text.rstrip()}\n\n# Instructions\n{TASK_FILE_INSTRUCTIONS}"
+        task_text = Template(TASK_FILE_TEMPLATE).render(problem_text=prompt_text.rstrip())
         tool_registry.write_problem_file(rollout_key=rollout_key, problem_text=task_text)
         prompt = format_conversation_with_tools(prompt="Please work on the task in the environment.", tools=tool_specs)
 
