@@ -8,6 +8,56 @@ from slime.utils.types import Sample
 logger = logging.getLogger(__name__)
 
 
+_CARRYOVER_TRAIN_DATA: dict[str, list] = {}
+
+
+def _list_like_train_fields(data: dict, num_items: int) -> set[str]:
+    return {key for key, value in data.items() if isinstance(value, list) and len(value) == num_items}
+
+
+def _merge_with_carryover(expanded: dict) -> None:
+    if not _CARRYOVER_TRAIN_DATA:
+        return
+
+    carry_num_items = len(_CARRYOVER_TRAIN_DATA.get("tokens", []))
+    current_num_items = len(expanded["tokens"])
+
+    if carry_num_items == 0:
+        _CARRYOVER_TRAIN_DATA.clear()
+        return
+
+    all_keys = _list_like_train_fields(_CARRYOVER_TRAIN_DATA, carry_num_items) | _list_like_train_fields(
+        expanded, current_num_items
+    )
+    for key in all_keys:
+        carry_values = _CARRYOVER_TRAIN_DATA.get(key, [None] * carry_num_items)
+        current_values = expanded.get(key, [None] * current_num_items)
+        expanded[key] = carry_values + current_values
+
+    _CARRYOVER_TRAIN_DATA.clear()
+
+
+def _stash_carryover(expanded: dict, start_idx: int) -> None:
+    _CARRYOVER_TRAIN_DATA.clear()
+
+    num_items = len(expanded["tokens"])
+    if start_idx >= num_items:
+        return
+
+    for key in _list_like_train_fields(expanded, num_items):
+        _CARRYOVER_TRAIN_DATA[key] = expanded[key][start_idx:]
+
+
+def _slice_train_data(expanded: dict, end_idx: int) -> dict:
+    num_items = len(expanded["tokens"])
+    end_idx = max(0, min(end_idx, num_items))
+
+    sliced = dict(expanded)
+    for key in _list_like_train_fields(expanded, num_items):
+        sliced[key] = expanded[key][:end_idx]
+    return sliced
+
+
 def _infer_data_parallel_size(args) -> int:
     """Best-effort inference of DP size used by train-side partitioning."""
     for attr in ("data_parallel_size", "dp_size", "train_dp_size"):
@@ -262,8 +312,21 @@ def convert_samples_to_train_data(args, samples: list[Sample] | list[list[Sample
     dp_size = _infer_data_parallel_size(args)
     _trim_to_dp_multiple(expanded, dp_size)
 
+    _merge_with_carryover(expanded)
+
     configured_gbs = int(getattr(args, "global_batch_size", 0) or 0)
-    _trim_to_global_batch_multiple(expanded, configured_gbs)
+    num_items = len(expanded["tokens"])
+
+    if configured_gbs > 0:
+        usable_items = (num_items // configured_gbs) * configured_gbs
+        if 0 < usable_items < num_items:
+            _stash_carryover(expanded, usable_items)
+            logger.info(
+                "Queued %d converted items into retool_bash carryover buffer; using %d items this rollout",
+                num_items - usable_items,
+                usable_items,
+            )
+            expanded = _slice_train_data(expanded, usable_items)
 
     dynamic_global_batch_size = _infer_dynamic_global_batch_size(args, len(expanded["tokens"]), dp_size)
     if dynamic_global_batch_size is not None:
