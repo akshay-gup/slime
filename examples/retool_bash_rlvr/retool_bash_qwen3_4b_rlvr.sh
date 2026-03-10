@@ -168,6 +168,9 @@ MISC_ARGS=(
    --attention-backend flash
 )
 
+pkill -9 -f ray || true
+pkill -9 -f sglang || true
+
 ray start --head --node-ip-address "${MASTER_ADDR}" --num-gpus "${NUM_GPUS}" --disable-usage-stats --dashboard-host=0.0.0.0 --dashboard-port="${RAY_DASHBOARD_PORT}"
 
 RUNTIME_ENV_JSON="{
