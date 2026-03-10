@@ -62,14 +62,15 @@ By default (`shared_workspace_across_prompts=True`), all prompts share one bash 
 - fixed `NUM_GPUS=4` (no auto detection)
 - fixed `NUM_GPUS_PER_NODE=4` and passes `--num-gpus-per-node 4` explicitly under `--colocate`
 - `--rollout-num-gpus-per-engine 1` to run one rollout engine per GPU
+- defaults to Open-R1 level-4 parquet prompts from `data/open-r1/level_4` (override with `OPEN_R1_LEVEL4_DIR` or `PROMPT_DATA`)
 - rollout workspaces are created per-key and cleaned up after finalization to avoid disk growth
-- memory-safer defaults for 4xH100 RLVR (`--max-tokens-per-gpu 5120`, `--rollout-max-response-len 4096`, `--eval-max-response-len 8192`, `--sglang-mem-fraction-static 0.8`)
-- all three limits can be overridden via env vars (`MAX_TOKENS_PER_GPU`, `ROLLOUT_MAX_RESPONSE_LEN`, `EVAL_MAX_RESPONSE_LEN`) when debugging throughput vs. stability
+- memory-safer defaults for 4xH100 RLVR (`--max-tokens-per-gpu 5120`, `--rollout-max-response-len 4096`, `--sglang-mem-fraction-static 0.4`)
+- these limits can be overridden via env vars (`MAX_TOKENS_PER_GPU`, `ROLLOUT_MAX_RESPONSE_LEN`) when debugging throughput vs. stability
 
 The launcher now fails fast if conflicting environment overrides are present (for example,
 `ACTOR_NUM_GPUS_PER_NODE!=4`, `NUM_GPUS_PER_NODE!=4`, or `ROLLOUT_NUM_GPUS_PER_ENGINE!=1`) so
 4-GPU behavior stays explicit.
 
-The script also sets `--eval-label-key` via `EVAL_LABEL_KEY` (default: `label`) to match the AIME eval JSON schema.
+The current launch template does not include eval arguments; it focuses on training rollouts only.
 
 This behavior is implemented in `bash_tool_sandbox.py` via `ToolRegistry.prepare_rollout()` and `ToolRegistry.finalize_rollout()`, called from `generate()` and `reward_func()`.
