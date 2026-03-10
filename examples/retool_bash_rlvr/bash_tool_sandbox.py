@@ -43,6 +43,22 @@ EPHEMERAL_DIR_PATTERNS = [
 EPHEMERAL_FILE_REGEXES = [re.compile(pattern) for pattern in EPHEMERAL_FILE_PATTERNS]
 EPHEMERAL_DIR_REGEXES = [re.compile(pattern) for pattern in EPHEMERAL_DIR_PATTERNS]
 
+
+def _compile_contains_regex(pattern: str) -> re.Pattern[str]:
+    """Compile a relaxed regex that can match pattern fragments within names."""
+
+    flags = 0
+    normalized = pattern
+    if normalized.startswith("(?i)"):
+        flags |= re.IGNORECASE
+        normalized = normalized[4:]
+    normalized = normalized.removeprefix("^").removesuffix("$")
+    return re.compile(normalized, flags)
+
+
+EPHEMERAL_FILE_CONTAINS_REGEXES = [_compile_contains_regex(pattern) for pattern in EPHEMERAL_FILE_PATTERNS]
+EPHEMERAL_DIR_CONTAINS_REGEXES = [_compile_contains_regex(pattern) for pattern in EPHEMERAL_DIR_PATTERNS]
+
 TOOL_CONFIGS = {
     "max_turns": 16,
     "max_tool_calls": 16,
@@ -279,10 +295,14 @@ class ToolRegistry:
             self._remove_pattern_matched_ephemeral_artifacts(root)
 
     def _matches_ephemeral_file_pattern(self, name: str) -> bool:
-        return any(regex.fullmatch(name) for regex in EPHEMERAL_FILE_REGEXES)
+        return any(regex.fullmatch(name) for regex in EPHEMERAL_FILE_REGEXES) or any(
+            regex.search(name) for regex in EPHEMERAL_FILE_CONTAINS_REGEXES
+        )
 
     def _matches_ephemeral_dir_pattern(self, name: str) -> bool:
-        return any(regex.fullmatch(name) for regex in EPHEMERAL_DIR_REGEXES)
+        return any(regex.fullmatch(name) for regex in EPHEMERAL_DIR_REGEXES) or any(
+            regex.search(name) for regex in EPHEMERAL_DIR_CONTAINS_REGEXES
+        )
 
     def _is_empty_file(self, path: Path) -> bool:
         try:
