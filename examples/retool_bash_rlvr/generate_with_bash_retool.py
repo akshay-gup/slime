@@ -1,5 +1,6 @@
 import logging
 import re
+import time
 from pathlib import Path
 from typing import Any
 
@@ -18,6 +19,34 @@ from slime.utils.types import Sample
 from bash_tool_sandbox import TOOL_CONFIGS, create_tracer, tool_registry
 
 logger = logging.getLogger(__name__)
+
+
+class BatchTimeoutManager:
+    """Track shared batch timeout windows and allow partial completion."""
+
+    def __init__(self):
+        self._deadline_monotonic: float | None = None
+
+    def refresh_if_needed(self, timeout_seconds: int | None) -> None:
+        if timeout_seconds is None or timeout_seconds <= 0:
+            self._deadline_monotonic = None
+            return
+
+        now = time.monotonic()
+        if self._deadline_monotonic is None or now >= self._deadline_monotonic:
+            self._deadline_monotonic = now + timeout_seconds
+
+    def remaining_seconds(self) -> float | None:
+        if self._deadline_monotonic is None:
+            return None
+        return self._deadline_monotonic - time.monotonic()
+
+    def is_expired(self) -> bool:
+        remaining = self.remaining_seconds()
+        return remaining is not None and remaining <= 0
+
+
+BATCH_TIMEOUT_MANAGER = BatchTimeoutManager()
 
 REWARD_RESULT_FILE = "solution.md"
 PROBLEM_FILE = TOOL_CONFIGS["problem_file"]
@@ -278,6 +307,8 @@ async def generate(args, sample: Sample, sampling_params) -> Sample:
     rollout_key = _resolve_rollout_key(sample)
     rollout_lock = tool_registry.get_rollout_lock(rollout_key)
     tracer = create_tracer(rollout_key)
+    rollout_timeout_s = int(TOOL_CONFIGS.get("rollout_timeout", 0))
+    batch_timeout_s = int(TOOL_CONFIGS.get("batch_timeout", 0))
 
     prompt_text = _extract_prompt_text(sample.prompt)
     logger.info("[rollout=%s] Starting generate for sample index=%s, prompt: %.150s", rollout_key, sample.index, prompt_text)
@@ -285,6 +316,19 @@ async def generate(args, sample: Sample, sampling_params) -> Sample:
         tracer.log("generate_start", sample_index=sample.index, prompt_preview=prompt_text[:300])
 
     async with rollout_lock:
+        BATCH_TIMEOUT_MANAGER.refresh_if_needed(batch_timeout_s)
+        batch_remaining = BATCH_TIMEOUT_MANAGER.remaining_seconds()
+        if batch_remaining is not None and batch_remaining <= 0:
+            sample.status = Sample.Status.TRUNCATED
+            sample.metadata["batch_timeout_partial_completion"] = True
+            sample.metadata["batch_timeout_seconds"] = batch_timeout_s
+            logger.info("[rollout=%s] Batch timeout reached before rollout start; returning partial sample", rollout_key)
+            if tracer:
+                tracer.log("batch_timeout_pre_start", batch_timeout_s=batch_timeout_s)
+            return sample
+
+        rollout_start = time.monotonic()
+
         tool_registry.prepare_rollout(rollout_key)
         task_text = Template(TASK_FILE_TEMPLATE).render(
             reward_result_file=REWARD_RESULT_FILE,
@@ -307,6 +351,22 @@ async def generate(args, sample: Sample, sampling_params) -> Sample:
         max_segment_length = _infer_max_segment_length(args)
 
         for turn_num in range(TOOL_CONFIGS["max_turns"]):
+            elapsed = time.monotonic() - rollout_start
+            if rollout_timeout_s > 0 and elapsed >= rollout_timeout_s:
+                logger.info("[rollout=%s] Rollout timeout reached after %.2fs", rollout_key, elapsed)
+                if tracer:
+                    tracer.log("rollout_timeout", turn=turn_num + 1, elapsed_seconds=elapsed, timeout_seconds=rollout_timeout_s)
+                sample.metadata["rollout_timeout_hit"] = True
+                break
+
+            batch_remaining = BATCH_TIMEOUT_MANAGER.remaining_seconds()
+            if batch_remaining is not None and batch_remaining <= 0:
+                logger.info("[rollout=%s] Batch timeout reached after %.2fs; allowing partial completion", rollout_key, elapsed)
+                if tracer:
+                    tracer.log("batch_timeout", turn=turn_num + 1, elapsed_seconds=elapsed, batch_timeout_seconds=batch_timeout_s)
+                sample.metadata["batch_timeout_partial_completion"] = True
+                break
+
             logger.info("[rollout=%s] Turn %d/%d, context_tokens=%d, tool_calls=%d", rollout_key, turn_num + 1, TOOL_CONFIGS["max_turns"], len(prompt_tokens_ids + context_response_token_ids), tool_call_count)
             if tracer:
                 tracer.log("turn_start", turn=turn_num + 1, context_tokens=len(prompt_tokens_ids + context_response_token_ids), tool_calls_so_far=tool_call_count)
@@ -318,7 +378,34 @@ async def generate(args, sample: Sample, sampling_params) -> Sample:
                 "return_logprob": True,
             }
 
-            output = await post(url, payload)
+            generation_timeout: float | None = None
+            if rollout_timeout_s > 0:
+                generation_timeout = max(0.1, rollout_timeout_s - elapsed)
+            if batch_remaining is not None:
+                generation_timeout = (
+                    batch_remaining
+                    if generation_timeout is None
+                    else min(generation_timeout, batch_remaining)
+                )
+
+            try:
+                if generation_timeout is not None:
+                    output = await asyncio.wait_for(post(url, payload), timeout=max(0.1, generation_timeout))
+                else:
+                    output = await post(url, payload)
+            except asyncio.TimeoutError:
+                logger.info(
+                    "[rollout=%s] Timed out waiting for generation (remaining timeout %.2fs)",
+                    rollout_key,
+                    generation_timeout if generation_timeout is not None else -1,
+                )
+                if tracer:
+                    tracer.log("generation_timeout", turn=turn_num + 1, timeout_seconds=generation_timeout)
+                if rollout_timeout_s > 0 and (time.monotonic() - rollout_start) >= rollout_timeout_s:
+                    sample.metadata["rollout_timeout_hit"] = True
+                else:
+                    sample.metadata["batch_timeout_partial_completion"] = True
+                break
             finish_reason = output["meta_info"]["finish_reason"]["type"]
             if finish_reason == "abort":
                 logger.warning("[rollout=%s] Generation aborted", rollout_key)
@@ -413,7 +500,7 @@ async def generate(args, sample: Sample, sampling_params) -> Sample:
         sample.tool_call_count = tool_call_count
         sample.context_reset_token_segments = archived_context_response_token_ids
 
-        if saw_length_stop:
+        if saw_length_stop or sample.metadata.get("rollout_timeout_hit") or sample.metadata.get("batch_timeout_partial_completion"):
             sample.status = Sample.Status.TRUNCATED
         elif output["meta_info"]["finish_reason"]["type"] == "stop":
             sample.status = Sample.Status.COMPLETED
