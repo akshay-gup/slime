@@ -6,6 +6,7 @@ import hashlib
 import json
 import logging
 import os
+import re
 import subprocess
 import shutil
 import tempfile
@@ -19,6 +20,27 @@ logger = logging.getLogger(__name__)
 DEFAULT_WORKDIR = "/opt/NeMo/slime_bash_tool_workspace"
 DEFAULT_TRACE_DIR = "/opt/NeMo/slime_bash_tool_traces"
 REWARD_RESULT_FILE = "solution.md"
+
+EPHEMERAL_FILE_PATTERNS = [
+    r"(?i)^(answer|answers|solution|solutions)(\.(md|txt|py))?$",
+    r"(?i)^(final|new|temp|tmp)[_-]?(answer|solution)s?(\.(md|txt|py))?$",
+    r"(?i)^(answer|solution)s?[_-](final|new|temp|tmp)(\.(md|txt|py))?$",
+    r"(?i).*(tmp|temp|draft|copy|backup|bak)(\..*)?$",
+    r"(?i).*[_-]v[0-9]+(\..*)?$",
+    r"(?i).*[_-](ver|version)[0-9]+(\..*)?$",
+    r"(?i)^(step|stage|test|trial|scratch|tmp)[0-9]+(\..*)?$",
+    r"(?i)^(hello|script|run|temp|tmp|debug|check)(\..*)?$",
+    r"(?i)^(problem|prompt|task|instruction|question)(\..*)?$",
+    r"(?i).*(stdout|stderr|output|result|log)(\..*)?$",
+    r"(?i)^test[_-]?.*",
+]
+
+EPHEMERAL_DIR_PATTERNS = [
+    r"(?i)^(answer|answers|solution|solutions|tmp|temp|scratch|draft|backup|old|archive|trial)[_-]?.*",
+]
+
+EPHEMERAL_FILE_REGEXES = [re.compile(pattern) for pattern in EPHEMERAL_FILE_PATTERNS]
+EPHEMERAL_DIR_REGEXES = [re.compile(pattern) for pattern in EPHEMERAL_DIR_PATTERNS]
 
 TOOL_CONFIGS = {
     "max_turns": 16,
@@ -242,6 +264,8 @@ class ToolRegistry:
         rollout_base_dirs = [self._resolve_rollout_base_dir(rollout_key)]
 
         main_dir = self.base_workdir / "main"
+        managed_roots = [*rollout_dirs, *rollout_base_dirs, main_dir]
+
         for filename in [TOOL_CONFIGS["problem_file"], REWARD_RESULT_FILE]:
             rel = Path(filename)
             for rollout_dir in rollout_dirs:
@@ -249,6 +273,40 @@ class ToolRegistry:
             for rollout_base_dir in rollout_base_dirs:
                 self._write_bytes(rollout_base_dir, rel, None)
             self._write_bytes(main_dir, rel, None)
+
+        for root in managed_roots:
+            self._remove_pattern_matched_ephemeral_artifacts(root)
+
+    def _matches_ephemeral_file_pattern(self, name: str) -> bool:
+        return any(regex.fullmatch(name) for regex in EPHEMERAL_FILE_REGEXES)
+
+    def _matches_ephemeral_dir_pattern(self, name: str) -> bool:
+        return any(regex.fullmatch(name) for regex in EPHEMERAL_DIR_REGEXES)
+
+    def _is_empty_file(self, path: Path) -> bool:
+        try:
+            return path.stat().st_size == 0
+        except OSError:
+            return False
+
+    def _has_no_extension(self, path: Path) -> bool:
+        return path.suffix == ""
+
+    def _remove_pattern_matched_ephemeral_artifacts(self, root: Path):
+        if not root.exists():
+            return
+
+        for path in sorted(root.rglob("*"), key=lambda p: len(p.parts), reverse=True):
+            if ".git" in path.parts:
+                continue
+            if path.is_file() and (
+                self._matches_ephemeral_file_pattern(path.name)
+                or self._is_empty_file(path)
+                or self._has_no_extension(path)
+            ):
+                path.unlink(missing_ok=True)
+            elif path.is_dir() and self._matches_ephemeral_dir_pattern(path.name):
+                shutil.rmtree(path, ignore_errors=True)
 
     @contextmanager
     def _main_workspace_lock(self):
