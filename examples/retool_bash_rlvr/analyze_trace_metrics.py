@@ -9,7 +9,8 @@ from __future__ import annotations
 
 import argparse
 import json
-from collections import Counter, defaultdict
+import re
+from collections import Counter
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -26,6 +27,8 @@ class RolloutSummary:
     reward_answer_content_nonempty: bool | None = None
     reward_score: float | None = None
     merge_message: str | None = None
+    answer_write_events: list[dict[str, Any]] = field(default_factory=list)
+    reward_log_events: list[dict[str, Any]] = field(default_factory=list)
 
 
 def parse_args() -> argparse.Namespace:
@@ -51,7 +54,27 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Emit machine-readable JSON summary.",
     )
+    p.add_argument(
+        "--show-rollout-details",
+        type=int,
+        default=20,
+        help="Max rollout-level answer/reward rows to print in detail.",
+    )
+    p.add_argument(
+        "--rollout-details-out",
+        default="",
+        help="Optional path to write per-rollout answer-write + reward details as JSON.",
+    )
     return p.parse_args()
+
+
+_ANSWER_WRITE_PATTERN = re.compile(r"(?:^|\s)(?:>|>>|tee\s+|cat\s+.*?>)\s*[^\n]*answer\.md\b", re.IGNORECASE)
+
+
+def _looks_like_answer_write(command: str) -> bool:
+    if "answer.md" not in command.lower():
+        return False
+    return bool(_ANSWER_WRITE_PATTERN.search(command) or "answer.md" in command.lower())
 
 
 def expand_paths(inputs: list[str], pattern: str) -> list[Path]:
@@ -106,6 +129,13 @@ def update_summary(summary: RolloutSummary, ev: dict[str, Any]) -> None:
         content = str(ev.get("content", ""))
         summary.reward_answer_exists = exists
         summary.reward_answer_content_nonempty = bool(content.strip())
+        summary.reward_log_events.append(
+            {
+                "step": step,
+                "exists": exists,
+                "answer_preview": content[:200],
+            }
+        )
 
     if step == "reward_computed":
         score = ev.get("score")
@@ -113,6 +143,25 @@ def update_summary(summary: RolloutSummary, ev: dict[str, Any]) -> None:
             summary.reward_score = float(score)
         except (TypeError, ValueError):
             pass
+        summary.reward_log_events.append(
+            {
+                "step": step,
+                "score": ev.get("score"),
+                "pred": ev.get("pred", ""),
+                "ground_truth": ev.get("ground_truth", ""),
+            }
+        )
+
+    if step == "bash_execute":
+        command = str(ev.get("command", ""))
+        if _looks_like_answer_write(command):
+            summary.answer_write_events.append(
+                {
+                    "step": step,
+                    "turn": ev.get("turn"),
+                    "command": command,
+                }
+            )
 
     if step == "merge_result":
         summary.merge_message = str(ev.get("message", ""))
@@ -179,6 +228,19 @@ def build_report(files: list[Path]) -> dict[str, Any]:
                 }
             )
 
+    rollout_details: list[dict[str, Any]] = []
+    for s in sorted(rollouts.values(), key=lambda x: x.rollout_key):
+        if not s.answer_write_events and not s.reward_log_events:
+            continue
+        rollout_details.append(
+            {
+                "rollout_key": s.rollout_key,
+                "answer_write_events": s.answer_write_events,
+                "reward_logs": s.reward_log_events,
+                "files": sorted(s.files),
+            }
+        )
+
     return {
         "num_files": len(files),
         "num_rollouts": len(rollouts),
@@ -186,10 +248,11 @@ def build_report(files: list[Path]) -> dict[str, Any]:
         "global_steps": dict(global_steps),
         "issue_counts": dict(issue_counts),
         "suspicious_rollouts": sorted(suspicious, key=lambda x: (x["issue"], x["rollout_key"])),
+        "rollout_details": rollout_details,
     }
 
 
-def print_human(report: dict[str, Any], show_bad: int) -> None:
+def print_human(report: dict[str, Any], show_bad: int, show_rollout_details: int) -> None:
     print("=== retool_bash_rlvr trace metrics ===")
     print(f"files: {report['num_files']}")
     print(f"rollouts: {report['num_rollouts']}")
@@ -209,11 +272,28 @@ def print_human(report: dict[str, Any], show_bad: int) -> None:
     rows = report["suspicious_rollouts"]
     if not rows:
         print("\nNo suspicious rollouts detected.")
-        return
+    else:
+        print(f"\n-- Suspicious rollout details (showing up to {show_bad}) --")
+        for row in rows[:show_bad]:
+            print(json.dumps(row, ensure_ascii=False))
 
-    print(f"\n-- Suspicious rollout details (showing up to {show_bad}) --")
-    for row in rows[:show_bad]:
-        print(json.dumps(row, ensure_ascii=False))
+    rollout_rows = report.get("rollout_details", [])
+    if rollout_rows:
+        print(f"\n-- Rollout answer-write + reward details (showing up to {show_rollout_details}) --")
+        for row in rollout_rows[:show_rollout_details]:
+            print(json.dumps(row, ensure_ascii=False))
+
+
+def maybe_write_rollout_details(path_str: str, report: dict[str, Any]) -> None:
+    if not path_str:
+        return
+    out_path = Path(path_str)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    out_path.write_text(
+        json.dumps(report.get("rollout_details", []), indent=2, ensure_ascii=False) + "\n",
+        encoding="utf-8",
+    )
+    print(f"Wrote rollout details to: {out_path}")
 
 
 def main() -> int:
@@ -224,10 +304,11 @@ def main() -> int:
         return 1
 
     report = build_report(files)
+    maybe_write_rollout_details(args.rollout_details_out, report)
     if args.json:
         print(json.dumps(report, indent=2, ensure_ascii=False))
     else:
-        print_human(report, args.show_bad)
+        print_human(report, args.show_bad, args.show_rollout_details)
     return 0
 
 
