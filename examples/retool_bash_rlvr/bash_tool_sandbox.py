@@ -59,11 +59,29 @@ def _compile_contains_regex(pattern: str) -> re.Pattern[str]:
 EPHEMERAL_FILE_CONTAINS_REGEXES = [_compile_contains_regex(pattern) for pattern in EPHEMERAL_FILE_PATTERNS]
 EPHEMERAL_DIR_CONTAINS_REGEXES = [_compile_contains_regex(pattern) for pattern in EPHEMERAL_DIR_PATTERNS]
 
+
+def _resolve_timeout_defaults() -> tuple[int, int]:
+    """Resolve rollout/batch timeout defaults and keep rollout <= batch when both are enabled."""
+
+    rollout_timeout = int(os.environ.get("SLIME_BASH_ROLLOUT_TIMEOUT_S", "300"))
+    batch_timeout = int(os.environ.get("SLIME_BASH_BATCH_TIMEOUT_S", "7200"))
+
+    if rollout_timeout > 0 and batch_timeout > 0 and rollout_timeout > batch_timeout:
+        rollout_timeout = batch_timeout
+
+    return rollout_timeout, batch_timeout
+
+
+ROLLOUT_TIMEOUT_S, BATCH_TIMEOUT_S = _resolve_timeout_defaults()
+
 TOOL_CONFIGS = {
     "max_turns": 16,
     "max_tool_calls": 16,
     "tool_concurrency": 16,
-    "bash_timeout": 30,
+    "bash_timeout": int(os.environ.get("SLIME_BASH_COMMAND_TIMEOUT_S", "30")),
+    "max_bash_timeout": int(os.environ.get("SLIME_BASH_MAX_COMMAND_TIMEOUT_S", "120")),
+    "rollout_timeout": ROLLOUT_TIMEOUT_S,
+    "batch_timeout": BATCH_TIMEOUT_S,
     "max_output_chars": 8192,
     "workdir": os.environ.get("SLIME_BASH_TOOL_WORKDIR", DEFAULT_WORKDIR),
     "shared_workspace_across_prompts": os.environ.get("SLIME_BASH_SHARED_WORKSPACE_ACROSS_PROMPTS", "true").lower()
@@ -153,7 +171,13 @@ class BashSandbox:
 
         return before_fingerprint != after_fingerprint
 
-    async def execute_command(self, command: str, workdir: str, extra_env: dict[str, str] | None = None) -> str:
+    async def execute_command(
+        self,
+        command: str,
+        workdir: str,
+        extra_env: dict[str, str] | None = None,
+        timeout: int | float | None = None,
+    ) -> str:
         if not isinstance(command, str) or not command.strip():
             return "Error: 'command' must be a non-empty string."
 
@@ -163,7 +187,11 @@ class BashSandbox:
                 logger.warning("Command blocked by safety policy: %.200s", command)
                 return "Error: command blocked by safety policy."
 
-        logger.debug("Executing in %s: %.200s", workdir, command)
+        effective_timeout = self.timeout if timeout is None else timeout
+        if not isinstance(effective_timeout, (int, float)) or effective_timeout <= 0:
+            return "Error: timeout must be a positive number."
+
+        logger.debug("Executing in %s with timeout=%ss: %.200s", workdir, int(effective_timeout), command)
         Path(workdir).mkdir(parents=True, exist_ok=True)
         before_fingerprint = self._directory_fingerprint(workdir)
 
@@ -175,10 +203,10 @@ class BashSandbox:
                 cwd=workdir,
                 env={**os.environ, "GIT_TERMINAL_PROMPT": "0", **(extra_env or {})},
             )
-            stdout_bytes, stderr_bytes = await asyncio.wait_for(proc.communicate(), timeout=self.timeout)
+            stdout_bytes, stderr_bytes = await asyncio.wait_for(proc.communicate(), timeout=effective_timeout)
         except asyncio.TimeoutError:
-            logger.warning("Command timed out after %ds: %.200s", self.timeout, command)
-            return f"Error: command timed out after {self.timeout}s."
+            logger.warning("Command timed out after %ss: %.200s", int(effective_timeout), command)
+            return f"Error: command timed out after {int(effective_timeout)}s."
         except Exception as e:
             return f"Error: {e}"
 
@@ -513,6 +541,13 @@ class ToolRegistry:
                             "command": {
                                 "type": "string",
                                 "description": "The bash command to execute.",
+                            },
+                            "timeout_s": {
+                                "type": "integer",
+                                "description": (
+                                    "Optional timeout in seconds for this command only. "
+                                    f"Defaults to {TOOL_CONFIGS['bash_timeout']} and is capped at {TOOL_CONFIGS['max_bash_timeout']}."
+                                ),
                             }
                         },
                         "required": ["command"],
@@ -532,13 +567,30 @@ class ToolRegistry:
             return f"Error: Tool '{tool_name}' not found"
 
         command = arguments.get("command", "")
+        timeout_s = arguments.get("timeout_s")
         workdir = self._resolve_rollout_workdir(rollout_key)
         extra_env = {
             "SLIME_BASH_MAIN_DIR": str(workdir),
             "SLIME_BASH_ROLLOUT_KEY": "" if rollout_key is None else str(rollout_key),
         }
+
+        command_timeout: int | None = None
+        if timeout_s is not None:
+            try:
+                command_timeout = int(timeout_s)
+            except (TypeError, ValueError):
+                return "Error: timeout_s must be an integer."
+            if command_timeout <= 0:
+                return "Error: timeout_s must be positive."
+            command_timeout = min(command_timeout, int(TOOL_CONFIGS["max_bash_timeout"]))
+
         async with SEMAPHORE:
-            return await self.bash_sandbox.execute_command(command, workdir=str(workdir), extra_env=extra_env)
+            return await self.bash_sandbox.execute_command(
+                command,
+                workdir=str(workdir),
+                extra_env=extra_env,
+                timeout=command_timeout,
+            )
 
 
 tool_registry = ToolRegistry()

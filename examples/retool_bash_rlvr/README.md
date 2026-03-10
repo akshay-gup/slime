@@ -34,9 +34,19 @@ Tool outputs are appended as:
 `bash_tool_sandbox.py` blocks several dangerous command patterns and enforces timeout/output truncation:
 
 - timeout (`bash_timeout`)
+- optional per-command timeout override via tool arg `timeout_s` (capped by `max_bash_timeout`)
+- optional per-rollout wall-clock timeout (`rollout_timeout`) for partial trajectories
+- optional batch-level timeout (`batch_timeout`) with partial-completion behavior
 - output cap (`max_output_chars`)
 - blocked substrings (e.g. `rm -rf /`, `mkfs`)
 - default workspace root is `/opt/NeMo/slime_bash_tool_workspace` (override with `SLIME_BASH_TOOL_WORKDIR`)
+
+Timeout env vars exposed by the launch script:
+
+- `SLIME_BASH_COMMAND_TIMEOUT_S` (default: `30`)
+- `SLIME_BASH_MAX_COMMAND_TIMEOUT_S` (default: `120`)
+- `SLIME_BASH_ROLLOUT_TIMEOUT_S` (default: `300` = 5 minutes)
+- `SLIME_BASH_BATCH_TIMEOUT_S` (default: `7200` = 2 hours; should be >= rollout timeout)
 
 ## Rollout workspace merge policy
 
