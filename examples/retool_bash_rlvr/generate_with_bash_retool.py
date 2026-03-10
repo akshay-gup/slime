@@ -19,7 +19,7 @@ from bash_tool_sandbox import TOOL_CONFIGS, create_tracer, tool_registry
 
 logger = logging.getLogger(__name__)
 
-REWARD_RESULT_FILE = "answer.md"
+REWARD_RESULT_FILE = "solution.md"
 PROBLEM_FILE = TOOL_CONFIGS["problem_file"]
 TASK_FILE_TEMPLATE = """# Instructions
 

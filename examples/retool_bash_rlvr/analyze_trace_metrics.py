@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Collate retool_bash_rlvr trace JSONL files and emit debugging metrics.
 
-Primary goal: detect cases where the model appears to write `answer.md` but reward
+Primary goal: detect cases where the model appears to write `solution.md` but reward
 logic does not observe it (`reward_answer_file.exists == false`).
 """
 
@@ -68,13 +68,13 @@ def parse_args() -> argparse.Namespace:
     return p.parse_args()
 
 
-_ANSWER_WRITE_PATTERN = re.compile(r"(?:^|\s)(?:>|>>|tee\s+|cat\s+.*?>)\s*[^\n]*answer\.md\b", re.IGNORECASE)
+_ANSWER_WRITE_PATTERN = re.compile(r"(?:^|\s)(?:>|>>|tee\s+|cat\s+.*?>)\s*[^\n]*solution\.md\b", re.IGNORECASE)
 
 
 def _looks_like_answer_write(command: str) -> bool:
-    if "answer.md" not in command.lower():
+    if "solution.md" not in command.lower():
         return False
-    return bool(_ANSWER_WRITE_PATTERN.search(command) or "answer.md" in command.lower())
+    return bool(_ANSWER_WRITE_PATTERN.search(command) or "solution.md" in command.lower())
 
 
 def expand_paths(inputs: list[str], pattern: str) -> list[Path]:
