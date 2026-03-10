@@ -37,6 +37,7 @@ Tool outputs are appended as:
 - optional per-command timeout override via tool arg `timeout_s` (capped by `max_bash_timeout`)
 - optional per-rollout wall-clock timeout (`rollout_timeout`) for partial trajectories
 - optional batch-level timeout (`batch_timeout`) with partial-completion behavior
+- optional reward-function timeout (`reward_timeout`) for verifier safety
 - output cap (`max_output_chars`)
 - blocked substrings (e.g. `rm -rf /`, `mkfs`)
 - default workspace root is `/opt/NeMo/slime_bash_tool_workspace` (override with `SLIME_BASH_TOOL_WORKDIR`)
@@ -47,6 +48,7 @@ Timeout env vars exposed by the launch script:
 - `SLIME_BASH_MAX_COMMAND_TIMEOUT_S` (default: `120`)
 - `SLIME_BASH_ROLLOUT_TIMEOUT_S` (default: `300` = 5 minutes)
 - `SLIME_BASH_BATCH_TIMEOUT_S` (default: `7200` = 2 hours; should be >= rollout timeout)
+- `SLIME_BASH_REWARD_TIMEOUT_S` (default: `60`)
 
 ## Rollout workspace merge policy
 

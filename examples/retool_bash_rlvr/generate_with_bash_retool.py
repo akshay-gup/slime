@@ -538,7 +538,25 @@ async def reward_func(args, sample, **kwargs):
             solution_str = ""
 
         ground_truth = sample.label if sample.label is not None else ""
-        result = _compute_bigmath_score(solution_str, ground_truth)
+        reward_timeout_s = int(TOOL_CONFIGS.get("reward_timeout", 0))
+        if reward_timeout_s > 0:
+            try:
+                result = await asyncio.wait_for(
+                    asyncio.to_thread(_compute_bigmath_score, solution_str, ground_truth),
+                    timeout=reward_timeout_s,
+                )
+            except asyncio.TimeoutError:
+                logger.warning(
+                    "[rollout=%s] Reward computation timed out after %ss",
+                    rollout_key,
+                    reward_timeout_s,
+                )
+                if tracer:
+                    tracer.log("reward_timeout", timeout_seconds=reward_timeout_s)
+                result = {"score": 0.0, "pred": ""}
+        else:
+            result = _compute_bigmath_score(solution_str, ground_truth)
+
         if result["pred"] is None:
             result["pred"] = ""
 

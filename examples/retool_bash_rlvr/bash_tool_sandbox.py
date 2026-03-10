@@ -82,6 +82,7 @@ TOOL_CONFIGS = {
     "max_bash_timeout": int(os.environ.get("SLIME_BASH_MAX_COMMAND_TIMEOUT_S", "120")),
     "rollout_timeout": ROLLOUT_TIMEOUT_S,
     "batch_timeout": BATCH_TIMEOUT_S,
+    "reward_timeout": int(os.environ.get("SLIME_BASH_REWARD_TIMEOUT_S", "60")),
     "max_output_chars": 8192,
     "workdir": os.environ.get("SLIME_BASH_TOOL_WORKDIR", DEFAULT_WORKDIR),
     "shared_workspace_across_prompts": os.environ.get("SLIME_BASH_SHARED_WORKSPACE_ACROSS_PROMPTS", "true").lower()
