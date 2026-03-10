@@ -18,7 +18,7 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_WORKDIR = "/opt/NeMo/slime_bash_tool_workspace"
 DEFAULT_TRACE_DIR = "/opt/NeMo/slime_bash_tool_traces"
-REWARD_RESULT_FILE = "answer.md"
+REWARD_RESULT_FILE = "solution.md"
 
 TOOL_CONFIGS = {
     "max_turns": 16,
