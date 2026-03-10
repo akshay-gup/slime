@@ -30,13 +30,14 @@ EPHEMERAL_FILE_PATTERNS = [
     r"(?i).*[_-](ver|version)[0-9]+(\..*)?$",
     r"(?i)^(step|stage|test|trial|scratch|tmp)[0-9]+(\..*)?$",
     r"(?i)^(hello|script|run|temp|tmp|debug|check)(\..*)?$",
+    r"(?i)^(analysis|work)(\..*)?$",
     r"(?i)^(problem|prompt|task|instruction|question)(\..*)?$",
     r"(?i).*(stdout|stderr|output|result|log)(\..*)?$",
     r"(?i)^test[_-]?.*",
 ]
 
 EPHEMERAL_DIR_PATTERNS = [
-    r"(?i)^(answer|answers|solution|solutions|tmp|temp|scratch|draft|backup|old|archive|trial)[_-]?.*",
+    r"(?i)^(answer|answers|solution|solutions|tmp|temp|scratch|draft|backup|old|archive|trial|analysis|work)[_-]?.*",
 ]
 
 EPHEMERAL_FILE_REGEXES = [re.compile(pattern) for pattern in EPHEMERAL_FILE_PATTERNS]
