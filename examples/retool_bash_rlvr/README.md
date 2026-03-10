@@ -54,7 +54,7 @@ By default (`shared_workspace_across_prompts=True`), all prompts share one bash 
 
 
 - every sample starts by refreshing its rollout copy from the latest `workdir/main`
-- samples are sharded across rollout slots (`SLIME_BASH_NUM_ROLLOUT_ENVS`, default `8`) so multiple GPUs can execute tool rollouts concurrently
+- each rollout key gets a dedicated workspace directory and lock (no shared slot hashing collisions)
 - split/merge logic still happens per sample (branch, score, merge-or-discard)
 
 `retool_bash_qwen3_4b_rlvr.sh` is tuned for a single-node 4xH100 setup with a 4B model:
@@ -62,7 +62,7 @@ By default (`shared_workspace_across_prompts=True`), all prompts share one bash 
 - fixed `NUM_GPUS=4` (no auto detection)
 - fixed `NUM_GPUS_PER_NODE=4` and passes `--num-gpus-per-node 4` explicitly under `--colocate`
 - `--rollout-num-gpus-per-engine 1` to run one rollout engine per GPU
-- `SLIME_BASH_NUM_ROLLOUT_ENVS=4` so one bash workspace slot is available per GPU
+- rollout workspaces are created per-key and cleaned up after finalization to avoid disk growth
 - memory-safer defaults for 4xH100 RLVR (`--max-tokens-per-gpu 5120`, `--rollout-max-response-len 4096`, `--eval-max-response-len 8192`, `--sglang-mem-fraction-static 0.8`)
 - all three limits can be overridden via env vars (`MAX_TOKENS_PER_GPU`, `ROLLOUT_MAX_RESPONSE_LEN`, `EVAL_MAX_RESPONSE_LEN`) when debugging throughput vs. stability
 
