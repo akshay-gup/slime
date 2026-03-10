@@ -13,7 +13,6 @@ ROLLOUT_NUM_GPUS_PER_ENGINE="${ROLLOUT_NUM_GPUS_PER_ENGINE:-1}"
 RAY_DASHBOARD_PORT="${RAY_DASHBOARD_PORT:-8265}"
 SGLANG_MEM_FRACTION_STATIC="${SGLANG_MEM_FRACTION_STATIC:-0.4}"
 ROLLOUT_MAX_RESPONSE_LEN="${ROLLOUT_MAX_RESPONSE_LEN:-4096}"
-EVAL_MAX_RESPONSE_LEN="${EVAL_MAX_RESPONSE_LEN:-4096}"
 MAX_TOKENS_PER_GPU="${MAX_TOKENS_PER_GPU:-5120}"
 
 if command -v nvidia-smi >/dev/null 2>&1; then
@@ -58,20 +57,18 @@ MEGATRON_LM_PATH="${MEGATRON_LM_PATH:-${REPO_ROOT}/../Megatron-LM}"
 HF_CHECKPOINT="${HF_CHECKPOINT:-${REPO_ROOT}/Qwen/Qwen3-4B-Instruct-2507}"
 REF_LOAD="${REF_LOAD:-${REPO_ROOT}/Qwen/Qwen3-4B-Instruct-2507_torch_dist}"
 SAVE_DIR="${SAVE_DIR:-${REPO_ROOT}/outputs/qwen3-4b-bash-rlvr}"
-OPEN_R1_LEVEL3_DIR="${OPEN_R1_LEVEL3_DIR:-${REPO_ROOT}/data/open-r1/level_3}"
+OPEN_R1_LEVEL4_DIR="${OPEN_R1_LEVEL4_DIR:-${REPO_ROOT}/data/open-r1/level_4}"
 PROMPT_DATA="${PROMPT_DATA:-}"
-EVAL_PROMPT_DATA="${EVAL_PROMPT_DATA:-${REPO_ROOT}/data/aime-2024/aime-2024.jsonl}"
-EVAL_LABEL_KEY="${EVAL_LABEL_KEY:-label}"
 WANDB_PROJECT="${WANDB_PROJECT:-slime-open-r1}"
 WANDB_GROUP="${WANDB_GROUP:-qwen3-4B-bash-rlvr}"
 SLIME_BASH_TOOL_WORKDIR="${SLIME_BASH_TOOL_WORKDIR:-/opt/NeMo/slime_bash_tool_workspace}"
 
 if [ -z "${PROMPT_DATA}" ]; then
-   PROMPT_DATA="$(find "${OPEN_R1_LEVEL3_DIR}" -maxdepth 1 -type f -name '*.parquet' | sort | head -n 1)"
+   PROMPT_DATA="$(find "${OPEN_R1_LEVEL4_DIR}" -maxdepth 1 -type f -name '*.parquet' | sort | head -n 1)"
 fi
 
 if [ -z "${PROMPT_DATA}" ]; then
-   echo "ERROR: No parquet file found in OPEN_R1_LEVEL3_DIR=${OPEN_R1_LEVEL3_DIR}. Set PROMPT_DATA explicitly." >&2
+   echo "ERROR: No parquet file found in OPEN_R1_LEVEL4_DIR=${OPEN_R1_LEVEL4_DIR}. Set PROMPT_DATA explicitly." >&2
    exit 1
 fi
 
@@ -95,15 +92,6 @@ ROLLOUT_ARGS=(
    --rollout-temperature 1
    --global-batch-size 1024
    --balance-data
-)
-
-EVAL_ARGS=(
-   --eval-interval 20
-   --eval-prompt-data aime "${EVAL_PROMPT_DATA}"
-   --eval-label-key "${EVAL_LABEL_KEY}"
-   --n-samples-per-eval-prompt 8
-   --eval-max-response-len "${EVAL_MAX_RESPONSE_LEN}"
-   --eval-top-p 1
 )
 
 PERF_ARGS=(
@@ -195,7 +183,6 @@ ray job submit --address="http://127.0.0.1:${RAY_DASHBOARD_PORT}" \
    ${GRPO_ARGS[@]} \
    ${WANDB_ARGS[@]} \
    ${PERF_ARGS[@]} \
-   ${EVAL_ARGS[@]} \
    ${CUSTOM_ARGS[@]} \
    ${SGLANG_ARGS[@]} \
    ${MISC_ARGS[@]}
