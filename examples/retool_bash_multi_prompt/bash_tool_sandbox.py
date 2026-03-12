@@ -66,7 +66,7 @@ TOOL_CONFIGS = {
     "bash_timeout": 30,
     "max_output_chars": 8192,
     "workdir": os.environ.get("SLIME_BASH_TOOL_WORKDIR", DEFAULT_WORKDIR),
-    "shared_workspace_across_prompts": os.environ.get("SLIME_BASH_SHARED_WORKSPACE_ACROSS_PROMPTS", "true").lower()
+    "shared_workspace_across_prompts": os.environ.get("SLIME_BASH_SHARED_WORKSPACE_ACROSS_PROMPTS", "false").lower()
     in ("1", "true", "yes", "on"),
     "problem_file": "task.md",
     "trace_dir": os.environ.get("SLIME_BASH_TRACE_DIR", DEFAULT_TRACE_DIR),
