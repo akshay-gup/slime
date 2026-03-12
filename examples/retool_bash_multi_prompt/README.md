@@ -46,16 +46,17 @@ Each rollout runs in an isolated copy of `workdir/main`. After reward is compute
 - reward `<= 0`: all rollout workspace changes are discarded.
 - merge conflicts: both sides are kept as `*.main` and `*.rollout` companion files.
 
-By default (`shared_workspace_across_prompts=True`), all prompts share one bash workspace lineage:
-
-- at rollout start, the current sample problem is written to `task.md` inside the rollout workspace
-- system prompt only gives general environment instructions; the model reads `task.md` via bash commands
-- before merge/discard in reward finalization, `task.md` is removed from rollout/base/main workspaces
-
+By default (`shared_workspace_across_prompts=False`), each sample uses an isolated rollout workspace lineage:
 
 - every sample starts by refreshing its rollout copy from the latest `workdir/main`
 - each rollout key gets a dedicated workspace directory and lock (no shared slot hashing collisions)
 - split/merge logic still happens per sample (branch, score, merge-or-discard)
+
+When shared lineage is enabled (`shared_workspace_across_prompts=True`):
+
+- at rollout start, the current sample problem is written to `task.md` inside the rollout workspace
+- system prompt only gives general environment instructions; the model reads `task.md` via bash commands
+- before merge/discard in reward finalization, `task.md` is removed from rollout/base/main workspaces
 
 `retool_bash_qwen3_4b_rlvr.sh` is tuned for a single-node 4xH100 setup with a 4B model:
 
