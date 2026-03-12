@@ -23,12 +23,22 @@ def build_record(questions: list[str], solutions: list[str]) -> dict:
 def build_verl_parquet_openr1_bigmath_multi(
     subset="level_5",
     problems_per_prompt=5,
+    domain: str | None = None,
 ) -> Dataset:
     raw_ds = load_dataset(
         "open-r1/Big-Math-RL-Verified-Processed",
         subset,
         split="train",
     )
+
+    if domain is not None:
+        raw_ds = raw_ds.filter(lambda ex: ex.get("domain") == domain)
+
+    if len(raw_ds) == 0:
+        raise ValueError(
+            f"No samples found for subset={subset!r}"
+            + (f" and domain={domain!r}" if domain is not None else "")
+        )
 
     all_questions = [ex["prompt"] for ex in raw_ds]
     all_solutions = [ex["solution"] for ex in raw_ds]

@@ -58,6 +58,7 @@ HF_CHECKPOINT="${HF_CHECKPOINT:-${REPO_ROOT}/Qwen/Qwen3-4B-Instruct-2507}"
 REF_LOAD="${REF_LOAD:-${REPO_ROOT}/Qwen/Qwen3-4B-Instruct-2507_torch_dist}"
 SAVE_DIR="${SAVE_DIR:-${REPO_ROOT}/outputs/qwen3-4b-bash-rlvr}"
 OPEN_R1_MULTI_SUBSET="${OPEN_R1_MULTI_SUBSET:-level_4}"
+OPEN_R1_MULTI_DOMAIN="${OPEN_R1_MULTI_DOMAIN:-}"
 PROBLEMS_PER_PROMPT="${PROBLEMS_PER_PROMPT:-3}"
 PROMPT_DATA_DIR="${PROMPT_DATA_DIR:-${REPO_ROOT}/data/retool_bash_multi_prompt}"
 PROMPT_DATA_FILE="${PROMPT_DATA_FILE:-${PROMPT_DATA_DIR}/train.parquet}"
@@ -67,17 +68,19 @@ SLIME_BASH_TOOL_WORKDIR="${SLIME_BASH_TOOL_WORKDIR:-/opt/NeMo/slime_bash_tool_wo
 
 mkdir -p "${PROMPT_DATA_DIR}"
 pushd "${SCRIPT_DIR}" >/dev/null
-python3 - "${OPEN_R1_MULTI_SUBSET}" "${PROBLEMS_PER_PROMPT}" "${PROMPT_DATA_FILE}" <<'PY'
+python3 - "${OPEN_R1_MULTI_SUBSET}" "${PROBLEMS_PER_PROMPT}" "${PROMPT_DATA_FILE}" "${OPEN_R1_MULTI_DOMAIN}" <<'PY'
 import sys
 from data_utils import build_verl_parquet_openr1_bigmath_multi
 
 subset = sys.argv[1]
 problems_per_prompt = int(sys.argv[2])
 local_save_file = sys.argv[3]
+domain = sys.argv[4].strip() or None
 
 train_ds = build_verl_parquet_openr1_bigmath_multi(
     subset=subset,
     problems_per_prompt=problems_per_prompt,
+    domain=domain,
 )
 
 train_ds.to_parquet(local_save_file)
