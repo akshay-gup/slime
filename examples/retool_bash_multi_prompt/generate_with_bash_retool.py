@@ -16,10 +16,12 @@ from slime.utils.http_utils import post
 from slime.utils.types import Sample
 
 from bash_tool_sandbox import TOOL_CONFIGS, create_tracer, tool_registry
+from data_utils import PROBLEM_DELIMITER, SOLUTION_DELIMITER
 
 logger = logging.getLogger(__name__)
 
 REWARD_RESULT_FILE = "solution.md"
+MULTI_SOLUTION_RESULT_FILE = "solutions.md"
 PROBLEM_FILE = TOOL_CONFIGS["problem_file"]
 TASK_FILE_TEMPLATE = """# Instructions
 
@@ -106,6 +108,18 @@ def _extract_prompt_text(prompt: str | list[dict[str, str]]) -> str:
     if isinstance(prompt, str):
         return prompt
     return "\n".join(msg.get("content", "") for msg in prompt if msg.get("content"))
+
+
+def _split_multi_prompt(prompt_text: str) -> list[str]:
+    parts = [part.strip() for part in prompt_text.split(PROBLEM_DELIMITER)]
+    non_empty_parts = [part for part in parts if part]
+    return non_empty_parts or [prompt_text.strip()]
+
+
+def _split_multi_solution(solution_text: str) -> list[str]:
+    if not solution_text:
+        return []
+    return [part.strip() for part in solution_text.split(SOLUTION_DELIMITER)]
 
 TOOL_TEMPLATE = """<|im_start|>system
 {%- if messages[0]['role'] == 'system' %}
@@ -280,17 +294,13 @@ async def generate(args, sample: Sample, sampling_params) -> Sample:
     tracer = create_tracer(rollout_key)
 
     prompt_text = _extract_prompt_text(sample.prompt)
+    prompt_problems = _split_multi_prompt(prompt_text)
     logger.info("[rollout=%s] Starting generate for sample index=%s, prompt: %.150s", rollout_key, sample.index, prompt_text)
     if tracer:
         tracer.log("generate_start", sample_index=sample.index, prompt_preview=prompt_text[:300])
 
     async with rollout_lock:
         tool_registry.prepare_rollout(rollout_key)
-        task_text = Template(TASK_FILE_TEMPLATE).render(
-            reward_result_file=REWARD_RESULT_FILE,
-            problem_text=prompt_text.rstrip(),
-        )
-        tool_registry.write_problem_file(rollout_key=rollout_key, problem_text=task_text)
         prompt = format_conversation_with_tools(prompt="Please work on the task in the environment.", tools=tool_specs)
 
         prompt_tokens_ids = state.tokenizer(prompt, add_special_tokens=False)["input_ids"]
@@ -305,106 +315,151 @@ async def generate(args, sample: Sample, sampling_params) -> Sample:
         tool_call_count = 0
         saw_length_stop = False
         max_segment_length = _infer_max_segment_length(args)
+        collected_solutions: list[str] = []
+        rollout_dir = tool_registry._resolve_rollout_workdir(rollout_key)
 
-        for turn_num in range(TOOL_CONFIGS["max_turns"]):
-            logger.info("[rollout=%s] Turn %d/%d, context_tokens=%d, tool_calls=%d", rollout_key, turn_num + 1, TOOL_CONFIGS["max_turns"], len(prompt_tokens_ids + context_response_token_ids), tool_call_count)
+        for problem_idx, problem_text in enumerate(prompt_problems):
+            task_text = Template(TASK_FILE_TEMPLATE).render(
+                reward_result_file=REWARD_RESULT_FILE,
+                problem_text=problem_text.rstrip(),
+            )
+            tool_registry.write_problem_file(rollout_key=rollout_key, problem_text=task_text)
+
+            logger.info(
+                "[rollout=%s] Starting problem %d/%d",
+                rollout_key,
+                problem_idx + 1,
+                len(prompt_problems),
+            )
             if tracer:
-                tracer.log("turn_start", turn=turn_num + 1, context_tokens=len(prompt_tokens_ids + context_response_token_ids), tool_calls_so_far=tool_call_count)
+                tracer.log("problem_start", problem_index=problem_idx, total_problems=len(prompt_problems))
 
-            current_token_ids = prompt_tokens_ids + context_response_token_ids
-            payload = {
-                "input_ids": current_token_ids,
-                "sampling_params": sampling_params,
-                "return_logprob": True,
-            }
-
-            output = await post(url, payload)
-            finish_reason = output["meta_info"]["finish_reason"]["type"]
-            if finish_reason == "abort":
-                logger.warning("[rollout=%s] Generation aborted", rollout_key)
+            for turn_num in range(TOOL_CONFIGS["max_turns"]):
+                logger.info("[rollout=%s] Turn %d/%d, context_tokens=%d, tool_calls=%d", rollout_key, turn_num + 1, TOOL_CONFIGS["max_turns"], len(prompt_tokens_ids + context_response_token_ids), tool_call_count)
                 if tracer:
-                    tracer.log("abort", turn=turn_num + 1)
-                sample.status = Sample.Status.ABORTED
-                return sample
+                    tracer.log("turn_start", turn=turn_num + 1, context_tokens=len(prompt_tokens_ids + context_response_token_ids), tool_calls_so_far=tool_call_count)
 
-            cur_response_token_ids = [item[1] for item in output["meta_info"]["output_token_logprobs"]]
-            cur_response = state.tokenizer.decode(cur_response_token_ids)
-            cur_log_probs = [item[0] for item in output["meta_info"]["output_token_logprobs"]]
+                current_token_ids = prompt_tokens_ids + context_response_token_ids
+                payload = {
+                    "input_ids": current_token_ids,
+                    "sampling_params": sampling_params,
+                    "return_logprob": True,
+                }
 
-            logger.info("[rollout=%s] Turn %d: %d new tokens, finish_reason=%s", rollout_key, turn_num + 1, len(cur_response_token_ids), finish_reason)
-            if tracer:
-                tracer.log("model_output", turn=turn_num + 1, new_tokens=len(cur_response_token_ids), finish_reason=finish_reason, response_preview=cur_response[:500])
+                output = await post(url, payload)
+                finish_reason = output["meta_info"]["finish_reason"]["type"]
+                if finish_reason == "abort":
+                    logger.warning("[rollout=%s] Generation aborted", rollout_key)
+                    if tracer:
+                        tracer.log("abort", turn=turn_num + 1)
+                    sample.status = Sample.Status.ABORTED
+                    return sample
 
-            if sample.rollout_log_probs is None:
-                sample.rollout_log_probs = []
-            sample.rollout_log_probs += cur_log_probs
+                cur_response_token_ids = [item[1] for item in output["meta_info"]["output_token_logprobs"]]
+                cur_response = state.tokenizer.decode(cur_response_token_ids)
+                cur_log_probs = [item[0] for item in output["meta_info"]["output_token_logprobs"]]
 
-            response += cur_response
-            response_token_ids += cur_response_token_ids
-            context_response_token_ids += cur_response_token_ids
-            loss_masks += [1] * len(cur_response_token_ids)
-
-            if finish_reason == "length":
-                logger.info("[rollout=%s] Hit length limit, stopping", rollout_key)
+                logger.info("[rollout=%s] Turn %d: %d new tokens, finish_reason=%s", rollout_key, turn_num + 1, len(cur_response_token_ids), finish_reason)
                 if tracer:
-                    tracer.log("length_stop", turn=turn_num + 1)
-                saw_length_stop = True
-                break
+                    tracer.log("model_output", turn=turn_num + 1, new_tokens=len(cur_response_token_ids), finish_reason=finish_reason, response_preview=cur_response[:500])
 
-            next_obs, done = await execute_predictions(cur_response, rollout_key=rollout_key, tracer=tracer)
-            if done:
-                logger.info("[rollout=%s] Answer file detected, stopping", rollout_key)
-                if tracer:
-                    tracer.log("answer_found", turn=turn_num + 1)
-                break
+                if sample.rollout_log_probs is None:
+                    sample.rollout_log_probs = []
+                sample.rollout_log_probs += cur_log_probs
 
-            if "<tool_response>" in next_obs:
-                tool_call_count += 1
+                response += cur_response
+                response_token_ids += cur_response_token_ids
+                context_response_token_ids += cur_response_token_ids
+                loss_masks += [1] * len(cur_response_token_ids)
 
-            obs_tokens_ids = state.tokenizer(next_obs, add_special_tokens=False)["input_ids"]
-            response += next_obs
-            response_token_ids += obs_tokens_ids
-            context_response_token_ids += obs_tokens_ids
-            loss_masks += [0] * len(obs_tokens_ids)
-            sample.rollout_log_probs += [0.0] * len(obs_tokens_ids)
+                if finish_reason == "length":
+                    logger.info("[rollout=%s] Hit length limit, stopping", rollout_key)
+                    if tracer:
+                        tracer.log("length_stop", turn=turn_num + 1)
+                    saw_length_stop = True
+                    break
 
-            if _has_file_change(next_obs):
+                next_obs, done = await execute_predictions(cur_response, rollout_key=rollout_key, tracer=tracer)
+                if done:
+                    logger.info("[rollout=%s] Answer file detected, stopping", rollout_key)
+                    if tracer:
+                        tracer.log("answer_found", turn=turn_num + 1)
+                    break
+
+                if "<tool_response>" in next_obs:
+                    tool_call_count += 1
+
+                obs_tokens_ids = state.tokenizer(next_obs, add_special_tokens=False)["input_ids"]
+                response += next_obs
+                response_token_ids += obs_tokens_ids
+                context_response_token_ids += obs_tokens_ids
+                loss_masks += [0] * len(obs_tokens_ids)
+                sample.rollout_log_probs += [0.0] * len(obs_tokens_ids)
+
+                if _has_file_change(next_obs):
                 # When files are modified, clear ongoing context for the next model step.
                 # Keep the dropped context for downstream data pairing.
-                logger.info("[rollout=%s] File change detected, archiving context (%d tokens)", rollout_key, len(context_response_token_ids))
-                if tracer:
-                    tracer.log("context_reset", turn=turn_num + 1, archived_tokens=len(context_response_token_ids))
-                context_response_token_ids = _archive_and_reset_context_tokens(
-                    context_response_token_ids,
-                    archived_context_response_token_ids,
-                    max_segment_length=max_segment_length,
-                )
-
-            if max_segment_length is not None and len(context_response_token_ids) > max_segment_length:
-                logger.info(
-                    "[rollout=%s] Context length %d exceeded max segment length %d, archiving context",
-                    rollout_key,
-                    len(context_response_token_ids),
-                    max_segment_length,
-                )
-                if tracer:
-                    tracer.log(
-                        "context_reset_max_segment_length",
-                        turn=turn_num + 1,
-                        archived_tokens=len(context_response_token_ids),
+                    logger.info("[rollout=%s] File change detected, archiving context (%d tokens)", rollout_key, len(context_response_token_ids))
+                    if tracer:
+                        tracer.log("context_reset", turn=turn_num + 1, archived_tokens=len(context_response_token_ids))
+                    context_response_token_ids = _archive_and_reset_context_tokens(
+                        context_response_token_ids,
+                        archived_context_response_token_ids,
                         max_segment_length=max_segment_length,
                     )
+
+                if max_segment_length is not None and len(context_response_token_ids) > max_segment_length:
+                    logger.info(
+                        "[rollout=%s] Context length %d exceeded max segment length %d, archiving context",
+                        rollout_key,
+                        len(context_response_token_ids),
+                        max_segment_length,
+                    )
+                    if tracer:
+                        tracer.log(
+                            "context_reset_max_segment_length",
+                            turn=turn_num + 1,
+                            archived_tokens=len(context_response_token_ids),
+                            max_segment_length=max_segment_length,
+                        )
+                    context_response_token_ids = _archive_and_reset_context_tokens(
+                        context_response_token_ids,
+                        archived_context_response_token_ids,
+                        max_segment_length=max_segment_length,
+                    )
+
+                if tool_call_count >= TOOL_CONFIGS["max_tool_calls"]:
+                    logger.info("[rollout=%s] Max tool calls (%d) reached, stopping", rollout_key, TOOL_CONFIGS["max_tool_calls"])
+                    if tracer:
+                        tracer.log("max_tool_calls", turn=turn_num + 1, max_calls=TOOL_CONFIGS["max_tool_calls"])
+                    break
+
+            result_file = Path(rollout_dir) / REWARD_RESULT_FILE
+            if result_file.exists() and result_file.is_file():
+                problem_solution = result_file.read_text(encoding="utf-8", errors="replace").strip()
+                collected_solutions.append(problem_solution)
+                result_file.unlink(missing_ok=True)
+                logger.info("[rollout=%s] Collected solution for problem %d/%d", rollout_key, problem_idx + 1, len(prompt_problems))
+                if tracer:
+                    tracer.log("problem_solution_collected", problem_index=problem_idx, has_solution=bool(problem_solution))
+            else:
+                collected_solutions.append("")
+                logger.info("[rollout=%s] No solution file for problem %d/%d", rollout_key, problem_idx + 1, len(prompt_problems))
+                if tracer:
+                    tracer.log("problem_solution_missing", problem_index=problem_idx)
+
+            if context_response_token_ids:
                 context_response_token_ids = _archive_and_reset_context_tokens(
                     context_response_token_ids,
                     archived_context_response_token_ids,
                     max_segment_length=max_segment_length,
                 )
 
-            if tool_call_count >= TOOL_CONFIGS["max_tool_calls"]:
-                logger.info("[rollout=%s] Max tool calls (%d) reached, stopping", rollout_key, TOOL_CONFIGS["max_tool_calls"])
-                if tracer:
-                    tracer.log("max_tool_calls", turn=turn_num + 1, max_calls=TOOL_CONFIGS["max_tool_calls"])
-                break
+        (Path(rollout_dir) / MULTI_SOLUTION_RESULT_FILE).write_text(
+            SOLUTION_DELIMITER.join(collected_solutions),
+            encoding="utf-8",
+        )
+        sample.generated_problem_solutions = collected_solutions
 
         sample.tokens = prompt_tokens_ids + response_token_ids
         sample.response_length = len(response_token_ids)
@@ -436,11 +491,14 @@ async def reward_func(args, sample, **kwargs):
     async with rollout_lock:
         rollout_dir = tool_registry._resolve_rollout_workdir(rollout_key)
         result_file = Path(rollout_dir) / REWARD_RESULT_FILE
+        multi_result_file = Path(rollout_dir) / MULTI_SOLUTION_RESULT_FILE
         file_answer = ""
-        if result_file.exists() and result_file.is_file():
+        if multi_result_file.exists() and multi_result_file.is_file():
+            file_answer = multi_result_file.read_text(encoding="utf-8", errors="replace").strip()
+        elif result_file.exists() and result_file.is_file():
             file_answer = result_file.read_text(encoding="utf-8", errors="replace").strip()
 
-        logger.info("[rollout=%s] Answer file %s: %s", rollout_key, "found" if file_answer else "NOT found", result_file)
+        logger.info("[rollout=%s] Answer file %s: %s", rollout_key, "found" if file_answer else "NOT found", multi_result_file)
         if tracer:
             tracer.log("reward_answer_file", exists=bool(file_answer), content=file_answer[:500] if file_answer else "")
 
@@ -450,15 +508,31 @@ async def reward_func(args, sample, **kwargs):
             solution_str = ""
 
         ground_truth = sample.label if sample.label is not None else ""
-        result = _compute_bigmath_score(solution_str, ground_truth)
-        if result["pred"] is None:
-            result["pred"] = ""
+        multi_predictions = _split_multi_solution(solution_str)
+        multi_ground_truth = _split_multi_solution(ground_truth)
+
+        if len(multi_ground_truth) > 1:
+            per_problem_results = []
+            for idx, gold in enumerate(multi_ground_truth):
+                pred = multi_predictions[idx] if idx < len(multi_predictions) else ""
+                per_problem_results.append(_compute_bigmath_score(pred, gold))
+
+            avg_score = sum(item["score"] for item in per_problem_results) / len(per_problem_results)
+            result = {
+                "score": avg_score,
+                "pred": SOLUTION_DELIMITER.join(str(item["pred"] or "") for item in per_problem_results),
+                "per_problem_results": per_problem_results,
+            }
+        else:
+            result = _compute_bigmath_score(solution_str, ground_truth)
+            if result["pred"] is None:
+                result["pred"] = ""
 
         logger.info("[rollout=%s] Reward: score=%s, pred=%.100s, ground_truth=%.100s", rollout_key, result["score"], str(result["pred"]), str(ground_truth))
         if tracer:
             tracer.log("reward_computed", score=result["score"], pred=str(result["pred"])[:200], ground_truth=str(ground_truth)[:200])
 
-        result["reward_result_file"] = str(result_file)
+        result["reward_result_file"] = str(multi_result_file if multi_result_file.exists() else result_file)
         result["reward_result_content"] = file_answer
         merge_message = tool_registry.finalize_rollout(rollout_key=rollout_key, reward=result["score"])
         result["merge_message"] = merge_message
