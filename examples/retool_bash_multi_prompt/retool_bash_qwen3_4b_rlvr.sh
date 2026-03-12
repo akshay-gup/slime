@@ -57,20 +57,39 @@ MEGATRON_LM_PATH="${MEGATRON_LM_PATH:-${REPO_ROOT}/../Megatron-LM}"
 HF_CHECKPOINT="${HF_CHECKPOINT:-${REPO_ROOT}/Qwen/Qwen3-4B-Instruct-2507}"
 REF_LOAD="${REF_LOAD:-${REPO_ROOT}/Qwen/Qwen3-4B-Instruct-2507_torch_dist}"
 SAVE_DIR="${SAVE_DIR:-${REPO_ROOT}/outputs/qwen3-4b-bash-rlvr}"
-OPEN_R1_LEVEL5_DIR="${OPEN_R1_LEVEL5_DIR:-${REPO_ROOT}/data/open-r1/level_5}"
-PROMPT_DATA="${PROMPT_DATA:-}"
+OPEN_R1_MULTI_SUBSET="${OPEN_R1_MULTI_SUBSET:-level_4}"
+PROBLEMS_PER_PROMPT="${PROBLEMS_PER_PROMPT:-3}"
+PROMPT_DATA_DIR="${PROMPT_DATA_DIR:-${REPO_ROOT}/data/retool_bash_multi_prompt}"
+PROMPT_DATA_FILE="${PROMPT_DATA_FILE:-${PROMPT_DATA_DIR}/train.parquet}"
 WANDB_PROJECT="${WANDB_PROJECT:-slime-open-r1}"
 WANDB_GROUP="${WANDB_GROUP:-qwen3-4B-bash-rlvr}"
 SLIME_BASH_TOOL_WORKDIR="${SLIME_BASH_TOOL_WORKDIR:-/opt/NeMo/slime_bash_tool_workspace}"
 
-if [ -z "${PROMPT_DATA}" ]; then
-   PROMPT_DATA="$(find "${OPEN_R1_LEVEL5_DIR}" -maxdepth 1 -type f -name '*.parquet' | sort | head -n 1)"
-fi
+mkdir -p "${PROMPT_DATA_DIR}"
+pushd "${SCRIPT_DIR}" >/dev/null
+python3 - "${OPEN_R1_MULTI_SUBSET}" "${PROBLEMS_PER_PROMPT}" "${PROMPT_DATA_FILE}" <<'PY'
+import sys
+from data_utils import build_verl_parquet_openr1_bigmath_multi
 
-if [ -z "${PROMPT_DATA}" ]; then
-   echo "ERROR: No parquet file found in OPEN_R1_LEVEL5_DIR=${OPEN_R1_LEVEL5_DIR}. Set PROMPT_DATA explicitly." >&2
-   exit 1
-fi
+subset = sys.argv[1]
+problems_per_prompt = int(sys.argv[2])
+local_save_file = sys.argv[3]
+
+train_ds = build_verl_parquet_openr1_bigmath_multi(
+    subset=subset,
+    problems_per_prompt=problems_per_prompt,
+)
+
+train_ds.to_parquet(local_save_file)
+
+print('Wrote:', local_save_file)
+print(f'Train examples: {len(train_ds)}')
+print(f"Problems in first prompt: {train_ds[0]['prompt'].count('=== PROBLEM DELIMITER ===') + 1}")
+print(train_ds[0])
+PY
+popd >/dev/null
+
+PROMPT_DATA="${PROMPT_DATA_FILE}"
 
 CKPT_ARGS=(
    --hf-checkpoint "${HF_CHECKPOINT}"
