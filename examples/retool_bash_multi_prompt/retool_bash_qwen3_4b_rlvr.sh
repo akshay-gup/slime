@@ -15,6 +15,11 @@ SGLANG_MEM_FRACTION_STATIC="${SGLANG_MEM_FRACTION_STATIC:-0.4}"
 ROLLOUT_MAX_RESPONSE_LEN="${ROLLOUT_MAX_RESPONSE_LEN:-4096}"
 MAX_TOKENS_PER_GPU="${MAX_TOKENS_PER_GPU:-5120}"
 
+if [ "${MAX_TOKENS_PER_GPU}" -le "${ROLLOUT_MAX_RESPONSE_LEN}" ]; then
+   echo "ERROR: MAX_TOKENS_PER_GPU (${MAX_TOKENS_PER_GPU}) must be greater than ROLLOUT_MAX_RESPONSE_LEN (${ROLLOUT_MAX_RESPONSE_LEN})" >&2
+   exit 1
+fi
+
 if command -v nvidia-smi >/dev/null 2>&1; then
    NVLINK_COUNT="$(nvidia-smi topo -m 2>/dev/null | grep -o 'NV[0-9][0-9]*' | wc -l)"
 else

@@ -67,6 +67,7 @@ When shared lineage is enabled (`shared_workspace_across_prompts=True`):
 - rollout workspaces are created per-key and cleaned up after finalization to avoid disk growth
 - memory-safer defaults for 4xH100 RLVR (`--max-tokens-per-gpu 5120`, `--rollout-max-response-len 4096`, `--sglang-mem-fraction-static 0.4`)
 - these limits can be overridden via env vars (`MAX_TOKENS_PER_GPU`, `ROLLOUT_MAX_RESPONSE_LEN`) when debugging throughput vs. stability
+- launcher validates `MAX_TOKENS_PER_GPU > ROLLOUT_MAX_RESPONSE_LEN` so the GPU per-turn token budget is always higher than the context segment limit used by this multi-prompt setup
 
 The launcher now fails fast if conflicting environment overrides are present (for example,
 `ACTOR_NUM_GPUS_PER_NODE!=4`, `NUM_GPUS_PER_NODE!=4`, or `ROLLOUT_NUM_GPUS_PER_ENGINE!=1`) so
