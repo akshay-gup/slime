@@ -60,8 +60,7 @@ EPHEMERAL_FILE_CONTAINS_REGEXES = [_compile_contains_regex(pattern) for pattern 
 EPHEMERAL_DIR_CONTAINS_REGEXES = [_compile_contains_regex(pattern) for pattern in EPHEMERAL_DIR_PATTERNS]
 
 TOOL_CONFIGS = {
-    "max_turns": 16,
-    "max_tool_calls": 16,
+    "max_turns": int(os.environ.get("SLIME_BASH_MAX_TURNS", os.environ.get("PROBLEMS_PER_PROMPT", "16"))),
     "tool_concurrency": 16,
     "bash_timeout": 30,
     "max_output_chars": 8192,
