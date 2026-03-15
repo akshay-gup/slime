@@ -427,11 +427,6 @@ async def generate(args, sample: Sample, sampling_params) -> Sample:
                         max_segment_length=max_segment_length,
                     )
 
-                if tool_call_count >= TOOL_CONFIGS["max_tool_calls"]:
-                    logger.info("[rollout=%s] Max tool calls (%d) reached, stopping", rollout_key, TOOL_CONFIGS["max_tool_calls"])
-                    if tracer:
-                        tracer.log("max_tool_calls", turn=turn_num + 1, max_calls=TOOL_CONFIGS["max_tool_calls"])
-                    break
 
             result_file = Path(rollout_dir) / REWARD_RESULT_FILE
             if result_file.exists() and result_file.is_file():
