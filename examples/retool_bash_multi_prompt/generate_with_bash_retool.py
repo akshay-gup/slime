@@ -239,10 +239,6 @@ async def execute_predictions(prediction: str, rollout_key: str | int | None, tr
     )
 
 
-def _has_file_change(tool_response: str) -> bool:
-    return "Files changed: yes" in tool_response
-
-
 def _resolve_rollout_key(sample: Sample) -> str | int | None:
     if TOOL_CONFIGS.get("shared_workspace_across_prompts", True):
         if sample.index is not None:
@@ -384,6 +380,21 @@ async def generate(args, sample: Sample, sampling_params) -> Sample:
                     logger.info("[rollout=%s] Answer file detected, stopping", rollout_key)
                     if tracer:
                         tracer.log("answer_found", turn=turn_num + 1)
+                    if context_response_token_ids:
+                        # Reset context only when the model has produced a solution file,
+                        # not on every intermediate file mutation in the workspace.
+                        logger.info(
+                            "[rollout=%s] Solution file written, archiving context (%d tokens)",
+                            rollout_key,
+                            len(context_response_token_ids),
+                        )
+                        if tracer:
+                            tracer.log("context_reset_solution_file", turn=turn_num + 1, archived_tokens=len(context_response_token_ids))
+                        context_response_token_ids = _archive_and_reset_context_tokens(
+                            context_response_token_ids,
+                            archived_context_response_token_ids,
+                            max_segment_length=max_segment_length,
+                        )
                     break
 
                 if "<tool_response>" in next_obs:
@@ -395,18 +406,6 @@ async def generate(args, sample: Sample, sampling_params) -> Sample:
                 context_response_token_ids += obs_tokens_ids
                 loss_masks += [0] * len(obs_tokens_ids)
                 sample.rollout_log_probs += [0.0] * len(obs_tokens_ids)
-
-                if _has_file_change(next_obs):
-                # When files are modified, clear ongoing context for the next model step.
-                # Keep the dropped context for downstream data pairing.
-                    logger.info("[rollout=%s] File change detected, archiving context (%d tokens)", rollout_key, len(context_response_token_ids))
-                    if tracer:
-                        tracer.log("context_reset", turn=turn_num + 1, archived_tokens=len(context_response_token_ids))
-                    context_response_token_ids = _archive_and_reset_context_tokens(
-                        context_response_token_ids,
-                        archived_context_response_token_ids,
-                        max_segment_length=max_segment_length,
-                    )
 
                 if max_segment_length is not None and len(context_response_token_ids) > max_segment_length:
                     logger.info(
