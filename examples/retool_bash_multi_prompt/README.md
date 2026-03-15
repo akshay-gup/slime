@@ -54,9 +54,9 @@ By default (`shared_workspace_across_prompts=False`), each sample uses an isolat
 
 When shared lineage is enabled (`shared_workspace_across_prompts=True`):
 
-- at rollout start, the current sample problem is written to `task.md` inside the rollout workspace
-- system prompt only gives general environment instructions; the model reads `task.md` via bash commands
-- before merge/discard in reward finalization, `task.md` is removed from rollout/base/main workspaces
+- at rollout start, each sample writes `README.md` once in the rollout workspace as stable instructions
+- `task.md` is written/overwritten inside the per-problem loop and cleaned during finalization
+- the system prompt is minimal and only asks the model to read `README.md` (no extra user prompt text)
 
 `retool_bash_qwen3_4b_rlvr.sh` is tuned for a single-node 4xH100 setup with a 4B model:
 
