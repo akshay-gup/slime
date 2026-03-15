@@ -68,6 +68,7 @@ TOOL_CONFIGS = {
     "shared_workspace_across_prompts": os.environ.get("SLIME_BASH_SHARED_WORKSPACE_ACROSS_PROMPTS", "false").lower()
     in ("1", "true", "yes", "on"),
     "problem_file": "task.md",
+    "instruction_file": "README.md",
     "trace_dir": os.environ.get("SLIME_BASH_TRACE_DIR", DEFAULT_TRACE_DIR),
     "blocked_patterns": [
         "rm -rf /",
@@ -266,12 +267,22 @@ class ToolRegistry:
             self._copy_directory(main_dir, rollout_dir)
             self._copy_directory(main_dir, rollout_base_dir)
 
-    def write_problem_file(self, rollout_key: str | int | None, problem_text: str):
-        """Write the per-rollout task description file into the rollout workspace."""
+    def write_problem_file(
+        self,
+        rollout_key: str | int | None,
+        problem_text: str | None = None,
+        instruction_text: str | None = None,
+    ):
+        """Write per-rollout instruction/task files into the rollout workspace."""
 
         rollout_dir = self._resolve_rollout_workdir(rollout_key)
-        problem_file = rollout_dir / TOOL_CONFIGS["problem_file"]
-        problem_file.write_text(problem_text, encoding="utf-8")
+        if problem_text is not None:
+            problem_file = rollout_dir / TOOL_CONFIGS["problem_file"]
+            problem_file.write_text(problem_text, encoding="utf-8")
+
+        if instruction_text is not None:
+            instruction_file = rollout_dir / TOOL_CONFIGS["instruction_file"]
+            instruction_file.write_text(instruction_text, encoding="utf-8")
 
     def remove_ephemeral_files(self, rollout_key: str | int | None):
         """Remove per-rollout task and answer files before merge/discard."""

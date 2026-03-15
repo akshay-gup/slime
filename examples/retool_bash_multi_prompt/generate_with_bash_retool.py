@@ -22,8 +22,7 @@ logger = logging.getLogger(__name__)
 
 REWARD_RESULT_FILE = "solution.md"
 MULTI_SOLUTION_RESULT_FILE = "solutions.md"
-PROBLEM_FILE = TOOL_CONFIGS["problem_file"]
-TASK_FILE_TEMPLATE = """# Instructions
+README_FILE_TEMPLATE = """# Instructions
 
 Your working memory resets frequently. Anything not written to a file
 will be lost. This is normal.
@@ -50,7 +49,12 @@ This workspace persists across tasks. Files you create now will be here
 for future tasks. If you build something useful — a script, a strategy,
 a template — it stays. Organize however helps you work better over time.
 
-# Problem
+## Current task
+
+Read `task.md` in the current directory for the current problem statement.
+"""
+
+TASK_FILE_TEMPLATE = """# Problem
 
 {{problem_text}}
 """
@@ -158,17 +162,13 @@ For each function call, return a json object with function name and arguments wi
 """
 
 
-def format_conversation_with_tools(prompt: str, tools: list[dict[str, Any]] = None) -> str:
+def format_conversation_with_tools(tools: list[dict[str, Any]] = None) -> str:
     template = Template(TOOL_TEMPLATE)
     messages = [
         {
             "role": "system",
-            "content": (
-                "You are working in an environment with a bash tool. "
-                f"Start by reading {PROBLEM_FILE} in the current directory."
-            ),
-        },
-        {"role": "user", "content": prompt},
+            "content": "Read files from the current workspace only. Start by reading README.md.",
+        }
     ]
     rendered = template.render(messages=messages, tools=tools or [])
     logger.debug("System prompt rendered (%d chars): %.500s", len(rendered), rendered)
@@ -226,7 +226,7 @@ async def execute_predictions(prediction: str, rollout_key: str | int | None, tr
         rollout_dir = tool_registry._resolve_rollout_workdir(rollout_key)
         if (Path(rollout_dir) / REWARD_RESULT_FILE).is_file():
             return "", True
-        return (f"\nRead {PROBLEM_FILE} in the current directory for full instructions.\n", False)
+        return ("\nRead README.md for instructions and the current problem.\n", False)
 
     logger.info("[rollout=%s] Invalid tool call (action=%s)", rollout_key, action)
     if tracer:
@@ -297,7 +297,7 @@ async def generate(args, sample: Sample, sampling_params) -> Sample:
 
     async with rollout_lock:
         tool_registry.prepare_rollout(rollout_key)
-        prompt = format_conversation_with_tools(prompt="Please work on the task in the environment.", tools=tool_specs)
+        prompt = format_conversation_with_tools(tools=tool_specs)
 
         prompt_tokens_ids = state.tokenizer(prompt, add_special_tokens=False)["input_ids"]
         logger.info("[rollout=%s] Prompt tokenized: %d tokens", rollout_key, len(prompt_tokens_ids))
@@ -314,13 +314,22 @@ async def generate(args, sample: Sample, sampling_params) -> Sample:
         collected_solutions: list[str] = []
         rollout_dir = tool_registry._resolve_rollout_workdir(rollout_key)
 
+        readme_text = Template(README_FILE_TEMPLATE).render(
+            reward_result_file=REWARD_RESULT_FILE,
+        )
+        tool_registry.write_problem_file(
+            rollout_key=rollout_key,
+            problem_text=None,
+            instruction_text=readme_text,
+        )
+
         for problem_idx, problem_text in enumerate(prompt_problems):
             skip_problem_due_to_context_limit = False
-            task_text = Template(TASK_FILE_TEMPLATE).render(
-                reward_result_file=REWARD_RESULT_FILE,
-                problem_text=problem_text.rstrip(),
+            task_text = Template(TASK_FILE_TEMPLATE).render(problem_text=problem_text.rstrip())
+            tool_registry.write_problem_file(
+                rollout_key=rollout_key,
+                problem_text=task_text,
             )
-            tool_registry.write_problem_file(rollout_key=rollout_key, problem_text=task_text)
 
             logger.info(
                 "[rollout=%s] Starting problem %d/%d",
