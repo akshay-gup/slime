@@ -315,6 +315,7 @@ async def generate(args, sample: Sample, sampling_params) -> Sample:
         rollout_dir = tool_registry._resolve_rollout_workdir(rollout_key)
 
         for problem_idx, problem_text in enumerate(prompt_problems):
+            skip_problem_due_to_context_limit = False
             task_text = Template(TASK_FILE_TEMPLATE).render(
                 reward_result_file=REWARD_RESULT_FILE,
                 problem_text=problem_text.rstrip(),
@@ -409,27 +410,44 @@ async def generate(args, sample: Sample, sampling_params) -> Sample:
 
                 if max_segment_length is not None and len(context_response_token_ids) > max_segment_length:
                     logger.info(
-                        "[rollout=%s] Context length %d exceeded max segment length %d, archiving context",
+                        "[rollout=%s] Context length %d exceeded max segment length %d for problem %d/%d; skipping problem",
                         rollout_key,
                         len(context_response_token_ids),
                         max_segment_length,
+                        problem_idx + 1,
+                        len(prompt_problems),
                     )
                     if tracer:
                         tracer.log(
-                            "context_reset_max_segment_length",
+                            "problem_skipped_context_limit",
+                            problem_index=problem_idx,
                             turn=turn_num + 1,
                             archived_tokens=len(context_response_token_ids),
                             max_segment_length=max_segment_length,
                         )
+                    skip_problem_due_to_context_limit = True
                     context_response_token_ids = _archive_and_reset_context_tokens(
                         context_response_token_ids,
                         archived_context_response_token_ids,
                         max_segment_length=max_segment_length,
                     )
+                    break
 
 
             result_file = Path(rollout_dir) / REWARD_RESULT_FILE
-            if result_file.exists() and result_file.is_file():
+            if skip_problem_due_to_context_limit:
+                if result_file.exists() and result_file.is_file():
+                    result_file.unlink(missing_ok=True)
+                collected_solutions.append("")
+                logger.info(
+                    "[rollout=%s] Skipped problem %d/%d after context limit; recorded empty solution",
+                    rollout_key,
+                    problem_idx + 1,
+                    len(prompt_problems),
+                )
+                if tracer:
+                    tracer.log("problem_solution_skipped", problem_index=problem_idx, reason="context_limit")
+            elif result_file.exists() and result_file.is_file():
                 problem_solution = result_file.read_text(encoding="utf-8", errors="replace").strip()
                 collected_solutions.append(problem_solution)
                 result_file.unlink(missing_ok=True)
