@@ -340,10 +340,12 @@ async def generate(args, sample: Sample, sampling_params) -> Sample:
             if tracer:
                 tracer.log("problem_start", problem_index=problem_idx, total_problems=len(prompt_problems))
 
-            for turn_num in range(TOOL_CONFIGS["max_turns"]):
-                logger.info("[rollout=%s] Turn %d/%d, context_tokens=%d, tool_calls=%d", rollout_key, turn_num + 1, TOOL_CONFIGS["max_turns"], len(prompt_tokens_ids + context_response_token_ids), tool_call_count)
+            turn_num = 0
+            while True:
+                turn_num += 1
+                logger.info("[rollout=%s] Turn %d, context_tokens=%d, tool_calls=%d", rollout_key, turn_num, len(prompt_tokens_ids + context_response_token_ids), tool_call_count)
                 if tracer:
-                    tracer.log("turn_start", turn=turn_num + 1, context_tokens=len(prompt_tokens_ids + context_response_token_ids), tool_calls_so_far=tool_call_count)
+                    tracer.log("turn_start", turn=turn_num, context_tokens=len(prompt_tokens_ids + context_response_token_ids), tool_calls_so_far=tool_call_count)
 
                 current_token_ids = prompt_tokens_ids + context_response_token_ids
                 payload = {
@@ -357,7 +359,7 @@ async def generate(args, sample: Sample, sampling_params) -> Sample:
                 if finish_reason == "abort":
                     logger.warning("[rollout=%s] Generation aborted", rollout_key)
                     if tracer:
-                        tracer.log("abort", turn=turn_num + 1)
+                        tracer.log("abort", turn=turn_num)
                     sample.status = Sample.Status.ABORTED
                     return sample
 
@@ -365,9 +367,9 @@ async def generate(args, sample: Sample, sampling_params) -> Sample:
                 cur_response = state.tokenizer.decode(cur_response_token_ids)
                 cur_log_probs = [item[0] for item in output["meta_info"]["output_token_logprobs"]]
 
-                logger.info("[rollout=%s] Turn %d: %d new tokens, finish_reason=%s", rollout_key, turn_num + 1, len(cur_response_token_ids), finish_reason)
+                logger.info("[rollout=%s] Turn %d: %d new tokens, finish_reason=%s", rollout_key, turn_num, len(cur_response_token_ids), finish_reason)
                 if tracer:
-                    tracer.log("model_output", turn=turn_num + 1, new_tokens=len(cur_response_token_ids), finish_reason=finish_reason, response_preview=cur_response[:500])
+                    tracer.log("model_output", turn=turn_num, new_tokens=len(cur_response_token_ids), finish_reason=finish_reason, response_preview=cur_response[:500])
 
                 if sample.rollout_log_probs is None:
                     sample.rollout_log_probs = []
@@ -381,7 +383,7 @@ async def generate(args, sample: Sample, sampling_params) -> Sample:
                 if finish_reason == "length":
                     logger.info("[rollout=%s] Hit length limit, stopping", rollout_key)
                     if tracer:
-                        tracer.log("length_stop", turn=turn_num + 1)
+                        tracer.log("length_stop", turn=turn_num)
                     saw_length_stop = True
                     break
 
@@ -389,7 +391,7 @@ async def generate(args, sample: Sample, sampling_params) -> Sample:
                 if done:
                     logger.info("[rollout=%s] Answer file detected, stopping", rollout_key)
                     if tracer:
-                        tracer.log("answer_found", turn=turn_num + 1)
+                        tracer.log("answer_found", turn=turn_num)
                     if context_response_token_ids:
                         # Reset context only when the model has produced a solution file,
                         # not on every intermediate file mutation in the workspace.
@@ -399,7 +401,7 @@ async def generate(args, sample: Sample, sampling_params) -> Sample:
                             len(context_response_token_ids),
                         )
                         if tracer:
-                            tracer.log("context_reset_solution_file", turn=turn_num + 1, archived_tokens=len(context_response_token_ids))
+                            tracer.log("context_reset_solution_file", turn=turn_num, archived_tokens=len(context_response_token_ids))
                         context_response_token_ids = _archive_and_reset_context_tokens(
                             context_response_token_ids,
                             archived_context_response_token_ids,
@@ -430,7 +432,7 @@ async def generate(args, sample: Sample, sampling_params) -> Sample:
                         tracer.log(
                             "problem_skipped_context_limit",
                             problem_index=problem_idx,
-                            turn=turn_num + 1,
+                            turn=turn_num,
                             archived_tokens=len(context_response_token_ids),
                             max_segment_length=max_segment_length,
                         )
