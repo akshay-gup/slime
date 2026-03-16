@@ -159,9 +159,9 @@ TOOL_TEMPLATE = """{%- if tools %}
                 {%- if tool_call.function %}
                     {%- set tool_call = tool_call.function %}
                 {%- endif %}
-                {{- '<tool_call>\n{"name": "' }}
+                {{- '<tool_call>\n{\"name\": \"' }}
                 {{- tool_call.name }}
-                {{- '\", "arguments": ' }}
+                {{- '\", \"arguments\": ' }}
                 {%- if tool_call.arguments is string %}
                     {{- tool_call.arguments }}
                 {%- else %}
