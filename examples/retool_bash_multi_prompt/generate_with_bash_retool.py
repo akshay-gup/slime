@@ -175,6 +175,7 @@ def format_conversation_with_tools(tools: list[dict[str, Any]] = None) -> str:
     return rendered
 
 
+
 def postprocess_predictions(prediction: str):
     tool_call_pattern = r"<tool_call>\s*(\{.*?\})\s*</tool_call>"
     tool_call_match = re.search(tool_call_pattern, prediction, re.DOTALL)
@@ -325,6 +326,21 @@ async def generate(args, sample: Sample, sampling_params) -> Sample:
 
         for problem_idx, problem_text in enumerate(prompt_problems):
             skip_problem_due_to_context_limit = False
+            result_file = Path(rollout_dir) / REWARD_RESULT_FILE
+            if result_file.exists() and result_file.is_file():
+                # Ensure a stale solution from a previous problem cannot leak into
+                # the current problem's done detection.
+                result_file.unlink(missing_ok=True)
+                logger.info(
+                    "[rollout=%s] Removed stale %s before problem %d/%d",
+                    rollout_key,
+                    REWARD_RESULT_FILE,
+                    problem_idx + 1,
+                    len(prompt_problems),
+                )
+                if tracer:
+                    tracer.log("stale_solution_file_removed", problem_index=problem_idx)
+
             task_text = Template(TASK_FILE_TEMPLATE).render(problem_text=problem_text.rstrip())
             tool_registry.write_problem_file(
                 rollout_key=rollout_key,
@@ -444,8 +460,6 @@ async def generate(args, sample: Sample, sampling_params) -> Sample:
                     )
                     break
 
-
-            result_file = Path(rollout_dir) / REWARD_RESULT_FILE
             if skip_problem_due_to_context_limit:
                 if result_file.exists() and result_file.is_file():
                     result_file.unlink(missing_ok=True)
