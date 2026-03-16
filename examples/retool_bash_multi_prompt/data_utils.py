@@ -32,7 +32,8 @@ def build_verl_parquet_openr1_bigmath_multi(
     )
 
     if domain is not None:
-        raw_ds = raw_ds.filter(lambda ex: domain in (ex.get("domain") or ""))
+        domain = domain.lower()
+        raw_ds = raw_ds.filter(lambda ex: domain in (ex.get("domain") or "").lower())
 
     if len(raw_ds) == 0:
         raise ValueError(
