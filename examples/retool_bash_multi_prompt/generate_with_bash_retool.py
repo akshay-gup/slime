@@ -125,41 +125,67 @@ def _split_multi_solution(solution_text: str) -> list[str]:
         return []
     return [part.strip() for part in solution_text.split(SOLUTION_DELIMITER)]
 
-TOOL_TEMPLATE = """<|im_start|>system
-{%- if messages[0]['role'] == 'system' %}
-{{- messages[0]['content'] }}
+TOOL_TEMPLATE = """{%- if tools %}
+    {{- '<|im_start|>system\n' }}
+    {%- if messages[0].role == 'system' %}
+        {{- messages[0].content + '\n\n' }}
+    {%- endif %}
+    {{- "# Tools\n\nYou may call one or more functions to assist with the user query.\n\nYou are provided with function signatures within <tools></tools> XML tags:\n<tools>" }}
+    {%- for tool in tools %}
+        {{- "\n" }}
+        {{- tool | tojson }}
+    {%- endfor %}
+    {{- "\n</tools>\n\nFor each function call, return a json object with function name and arguments within <tool_call></tool_call> XML tags:\n<tool_call>\n{\"name\": <function-name>, \"arguments\": <args-json-object>}\n</tool_call><|im_end|>\n" }}
 {%- else %}
-You are a helpful assistant.
+    {%- if messages[0].role == 'system' %}
+        {{- '<|im_start|>system\n' + messages[0].content + '<|im_end|>\n' }}
+    {%- endif %}
 {%- endif %}
-{%- if tools %}
-# Tools
-
-You may call one or more functions to assist with the user query.
-
-You are provided with function signatures within <tools></tools> XML tags:
-<tools>
-{%- for tool in tools %}
-{{- tool | tojson }}
-{%- endfor %}
-</tools>
-
-For each function call, return a json object with function name and arguments within <tool_call></tool_call> XML tags:
-<tool_call>
-{"name": <function-name>, "arguments": <args-json-object>}
-</tool_call>
-{%- endif %}
-<|im_end|>
 {%- for message in messages %}
-{%- if message['role'] == 'user' %}
-<|im_start|>user
-{{- message['content'] }}<|im_end|>
-{%- elif message['role'] == 'assistant' %}
-<|im_start|>assistant
-{{- message['content'] }}<|im_end|>
-{%- endif %}
+    {%- if message.content is string %}
+        {%- set content = message.content %}
+    {%- else %}
+        {%- set content = '' %}
+    {%- endif %}
+    {%- if (message.role == "user") or (message.role == "system" and not loop.first) %}
+        {{- '<|im_start|>' + message.role + '\n' + content + '<|im_end|>' + '\n' }}
+    {%- elif message.role == "assistant" %}
+        {{- '<|im_start|>' + message.role + '\n' + content }}
+        {%- if message.tool_calls %}
+            {%- for tool_call in message.tool_calls %}
+                {%- if (loop.first and content) or (not loop.first) %}
+                    {{- '\n' }}
+                {%- endif %}
+                {%- if tool_call.function %}
+                    {%- set tool_call = tool_call.function %}
+                {%- endif %}
+                {{- '<tool_call>\n{"name": "' }}
+                {{- tool_call.name }}
+                {{- '\", "arguments": ' }}
+                {%- if tool_call.arguments is string %}
+                    {{- tool_call.arguments }}
+                {%- else %}
+                    {{- tool_call.arguments | tojson }}
+                {%- endif %}
+                {{- '}\n</tool_call>' }}
+            {%- endfor %}
+        {%- endif %}
+        {{- '<|im_end|>\n' }}
+    {%- elif message.role == "tool" %}
+        {%- if loop.first or (messages[loop.index0 - 1].role != "tool") %}
+            {{- '<|im_start|>user' }}
+        {%- endif %}
+        {{- '\n<tool_response>\n' }}
+        {{- content }}
+        {{- '\n</tool_response>' }}
+        {%- if loop.last or (messages[loop.index0 + 1].role != "tool") %}
+            {{- '<|im_end|>\n' }}
+        {%- endif %}
+    {%- endif %}
 {%- endfor %}
-<|im_start|>assistant
-"""
+{%- if add_generation_prompt %}
+    {{- '<|im_start|>assistant\n' }}
+{%- endif %}"""
 
 
 def format_conversation_with_tools(tools: list[dict[str, Any]] = None) -> str:
@@ -170,7 +196,7 @@ def format_conversation_with_tools(tools: list[dict[str, Any]] = None) -> str:
             "content": "Read files from the current workspace only. Start by reading README.md.",
         }
     ]
-    rendered = template.render(messages=messages, tools=tools or [])
+    rendered = template.render(messages=messages, tools=tools or [], add_generation_prompt=True)
     logger.debug("System prompt rendered (%d chars): %.500s", len(rendered), rendered)
     return rendered
 
