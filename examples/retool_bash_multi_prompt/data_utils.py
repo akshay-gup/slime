@@ -20,6 +20,19 @@ def build_record(questions: list[str], solutions: list[str]) -> dict:
     }
 
 
+def _domain_matches(example_domain: object, expected_domain: str) -> bool:
+    if isinstance(example_domain, str):
+        return expected_domain in example_domain.lower()
+
+    if isinstance(example_domain, (list, tuple, set)):
+        for value in example_domain:
+            if isinstance(value, str) and expected_domain in value.lower():
+                return True
+        return False
+
+    return False
+
+
 def build_verl_parquet_openr1_bigmath_multi(
     subset="level_5",
     problems_per_prompt=5,
@@ -33,7 +46,7 @@ def build_verl_parquet_openr1_bigmath_multi(
 
     if domain is not None:
         domain = domain.lower()
-        raw_ds = raw_ds.filter(lambda ex: domain in (ex.get("domain") or "").lower())
+        raw_ds = raw_ds.filter(lambda ex: _domain_matches(ex.get("domain"), domain))
 
     if len(raw_ds) == 0:
         raise ValueError(
