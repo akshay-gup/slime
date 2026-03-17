@@ -56,15 +56,41 @@ fi
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" &>/dev/null && pwd)"
 REPO_ROOT="$(cd -- "${SCRIPT_DIR}/../.." &>/dev/null && pwd)"
-source "${REPO_ROOT}/scripts/models/qwen3-4B.sh"
+MODEL_ARGS=(
+   --spec "slime_plugins.models.qwen3_5" "get_qwen3_5_spec"
+
+   --disable-bias-linear
+   --qk-layernorm
+   --group-query-attention
+   --num-attention-heads 16
+   --num-query-groups 4
+   --kv-channels 160
+   --num-layers 32
+   --hidden-size 2560
+   --ffn-hidden-size 9216
+   --use-gated-attention
+
+   --normalization RMSNorm
+   --apply-layernorm-1p
+   --position-embedding-type rope
+   --norm-epsilon 1e-6
+   --rotary-percent 0.25
+   --swiglu
+   --vocab-size 248320
+
+   --rotary-base 10000000
+
+   # qwen3.5 specific
+   --attention-output-gate
+)
 
 MEGATRON_LM_PATH="${MEGATRON_LM_PATH:-${REPO_ROOT}/../Megatron-LM}"
-HF_CHECKPOINT="${HF_CHECKPOINT:-${REPO_ROOT}/Qwen/Qwen3-4B-Instruct-2507}"
+HF_CHECKPOINT="${HF_CHECKPOINT:-${REPO_ROOT}/Qwen/Qwen3.5-4B}"
 REF_LOAD="${REF_LOAD:-${REPO_ROOT}/Qwen/Qwen3-4B-Instruct-2507_torch_dist}"
 SAVE_DIR="${SAVE_DIR:-${REPO_ROOT}/outputs/qwen3-4b-bash-rlvr}"
 OPEN_R1_MULTI_SUBSET="${OPEN_R1_MULTI_SUBSET:-level_4}"
 OPEN_R1_MULTI_DOMAIN="${OPEN_R1_MULTI_DOMAIN:-number theory}"
-PROBLEMS_PER_PROMPT="${PROBLEMS_PER_PROMPT:-100}"
+PROBLEMS_PER_PROMPT="${PROBLEMS_PER_PROMPT:-10}"
 export PROBLEMS_PER_PROMPT
 PROMPT_DATA_DIR="${PROMPT_DATA_DIR:-${REPO_ROOT}/data/retool_bash_multi_prompt}"
 PROMPT_DATA_FILE="${PROMPT_DATA_FILE:-${PROMPT_DATA_DIR}/train.parquet}"
@@ -102,10 +128,10 @@ PROMPT_DATA="${PROMPT_DATA_FILE}"
 
 CKPT_ARGS=(
    --hf-checkpoint "${HF_CHECKPOINT}"
-   --ref-load "${REF_LOAD}"
+
    --save "${SAVE_DIR}"
    --save-interval 20
-   --rotary-base 5000000
+   --rotary-base 10000000
 )
 
 ROLLOUT_ARGS=(
@@ -137,9 +163,7 @@ PERF_ARGS=(
 
 GRPO_ARGS=(
    --advantage-estimator grpo
-   --use-kl-loss
    --kl-loss-coef 0.00
-   --kl-loss-type low_var_kl
    --entropy-coef 0.00
    --eps-clip 0.2
    --eps-clip-high 0.28
@@ -172,6 +196,7 @@ CUSTOM_ARGS=(
 
 SGLANG_ARGS=(
    --rollout-num-gpus-per-engine "${ROLLOUT_NUM_GPUS_PER_ENGINE}"
+   --sglang-cuda-graph-bs 1 2 4 8 $(seq 16 8 256)
 )
 SGLANG_ARGS+=(--sglang-mem-fraction-static "${SGLANG_MEM_FRACTION_STATIC}")
 
