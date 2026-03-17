@@ -10,6 +10,7 @@ and then provide a final `Answer: \boxed{...}` response.
 - `custom_convert_samples_to_train_data.py`: Splits trajectories at context resets and expands train samples with divided rewards.
 - `bash_tool_sandbox.py`: Bash tool registry and command execution safeguards.
 - `retool_bash_qwen3_4b_rlvr.sh`: Launch script template for RLVR training.
+- `orchestrate_parallel_no_rl.py`: Inference-only orchestrator that runs K parallel trajectories per sample and keeps one winner (no policy updates).
 
 ## Tool format
 
